@@ -117,7 +117,7 @@ class XOGame:
         return self._valid_moves[coords[1], coords[0]]
 
     def get_valid_moves(self):
-        return np.fliplr(np.argwhere(game._valid_moves))
+        return np.fliplr(np.argwhere(self._valid_moves))
 
     def play_current_player(self, coords: tuple[int, int]) -> None:
         assert self.is_valid(coords)
