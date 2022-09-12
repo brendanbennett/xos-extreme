@@ -1,3 +1,4 @@
+import stat
 import numpy as np
 import numpy.typing as npt
 from copy import deepcopy
@@ -6,15 +7,26 @@ from collections import Counter
 
 
 class XOGame:
-    def __init__(self) -> None:
-        self.board = np.zeros((9, 9))
-        # players 1 and 2. 1 goes first
-        self.player: int = 1
-        self.winner: int = None
+    def __init__(self, game_state=None) -> None:
+        if game_state is None:
+            self.board = np.zeros((9, 9))
+            # players 1 and 2. 1 goes first
+            self.player: int = 1
+            self.winner: int = None
 
-        self._large_board = np.zeros((3, 3))
-        self._last_move: tuple[int, int] = None
-        self._valid_moves = np.full((9, 9), True)
+            self._large_board = np.zeros((3, 3))
+            self._last_move: tuple[int, int] = None
+            self._valid_moves_array = np.full((9, 9), True)
+        else:
+            self._init_from_game_state(game_state)
+
+    def _init_from_game_state(self, game_state):
+        self.board, self.player, self._last_move = game_state
+        (
+            self._valid_moves_array,
+            self.winner,
+        ) = self.valid_moves_array_and_winner_from_state(game_state)
+        self._large_board = self.generate_large_board_from_board(self.board)
 
     def _set_board(self, coords: tuple[int, int], value: int) -> None:
         self.board[coords[1], coords[0]] = value
@@ -45,6 +57,9 @@ class XOGame:
 
     @staticmethod
     def _get_large_coords_for_next(small_coords: tuple[int, int]) -> tuple[int, int]:
+        """Return coordinates of the small board to where the player is sent. None if no last move"""
+        if small_coords is None:
+            return None
         return (small_coords[0] % 3, small_coords[1] % 3)
 
     def _iterate_players(self) -> None:
@@ -53,19 +68,19 @@ class XOGame:
         else:
             self.player = 1
 
-    def _update_valid_moves(self) -> None:
+    def _update_valid_moves_array(self) -> None:
         """Return valid moves as one hot boolean np array"""
         large_coords = self._get_large_coords_for_next(self._last_move)
-        if self._get_large_board(large_coords) == 0:
+        if large_coords is not None and self._get_large_board(large_coords) == 0:
             send_to = np.zeros((3, 3))
             send_to[large_coords[1], large_coords[0]] = 1
             mask = np.repeat(np.repeat(send_to, 3, 0), 3, 1)
             masked = np.logical_and(self.board == 0, mask)
-            self._valid_moves = masked
+            self._valid_moves_array = masked
         else:
             mask = np.repeat(np.repeat(self._large_board, 3, 0), 3, 1)
-            self._valid_moves = 0 == self.board + mask
-        if not np.any(self._valid_moves) and self.winner is None:
+            self._valid_moves_array = 0 == self.board + mask
+        if not np.any(self._valid_moves_array) and self.winner is None:
             self.winner = 0
 
     @staticmethod
@@ -114,10 +129,10 @@ class XOGame:
                 self.winner = large_board_win
 
     def is_valid(self, coords) -> bool:
-        return self._valid_moves[coords[1], coords[0]]
+        return self._valid_moves_array[coords[1], coords[0]]
 
     def get_valid_moves(self):
-        return np.fliplr(np.argwhere(self._valid_moves))
+        return np.fliplr(np.argwhere(self._valid_moves_array))
 
     def play_current_player(self, coords: tuple[int, int]) -> None:
         assert self.is_valid(coords)
@@ -125,20 +140,74 @@ class XOGame:
         self._last_move = coords
         self._update_win_state()
 
-        self._update_valid_moves()
+        self._update_valid_moves_array()
         self._iterate_players()
 
     def display_board(self) -> None:
         print(self.board)
 
+    @staticmethod
+    def check_win_from_scratch(board: npt.NDArray, players=[1, 2]) -> int:
+        for p in players:
+            player_board: npt.NDArray = board == p
+            for i in range(3):
+                if any(
+                    (
+                        np.all(board[i, :] == p),
+                        np.all(board[:, i] == p),
+                    )
+                ):
+                    return p
+            if any(
+                (
+                    np.all(player_board.diagonal()),
+                    np.all(np.fliplr(player_board).diagonal()),
+                )
+            ):
+                return p
+        return None
+
+    def generate_large_board_from_board(self, board):
+        large_board = np.zeros((3, 3))
+
+        for x in range(3):
+            for y in range(3):
+                small_board = board[3 * y : 3 * y + 3, 3 * x : 3 * x + 3]
+                win = self.check_win_from_scratch(small_board)
+                large_board[y, x] = 0 if win is None else win
+        return large_board
+
+    def valid_moves_array_and_winner_from_state(self, game_state):
+        board, player, last_move = game_state
+        large_board = self.generate_large_board_from_board(board)
+        winner = self.check_win_from_scratch(large_board)
+
+        large_coords = self._get_large_coords_for_next(last_move)
+        if (
+            large_coords is not None
+            and large_board[large_coords[1], large_coords[0]] == 0
+        ):
+            send_to = np.zeros((3, 3))
+            send_to[large_coords[1], large_coords[0]] = 1
+            mask = np.repeat(np.repeat(send_to, 3, 0), 3, 1)
+            masked = np.logical_and(board == 0, mask)
+            valid_moves = masked
+        else:
+            mask = np.repeat(np.repeat(large_board, 3, 0), 3, 1)
+            valid_moves = 0 == board + mask
+        if not np.any(valid_moves):
+            winner = 0
+
+        return valid_moves, winner
+
 
 if __name__ == "__main__":
     rng = np.random.RandomState(100)
-    
+
     winners = []
 
     start = time.perf_counter()
-    for n in range(1000):
+    for n in range(100):
         game = XOGame()
         for i in range(81):
             # print(game._valid_moves)
@@ -157,6 +226,6 @@ if __name__ == "__main__":
         winners.append(game.winner)
     end = time.perf_counter()
 
-    player_wins = Counter(winners)
+    player_wins = dict(Counter(winners))
     print(player_wins)
     print(f"took {end - start} seconds.")

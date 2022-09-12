@@ -1,3 +1,5 @@
+from bdb import Breakpoint
+import re
 from game.game import XOGame
 import torch.nn as nn
 import torch
@@ -5,6 +7,14 @@ from torchsummary import summary
 from collections import deque
 from copy import deepcopy
 import numpy as np
+import numpy.typing as npt
+from collections import defaultdict
+import math
+import time
+
+import pyximport
+pyximport.install(setup_args={"include_dirs": np.get_include()})
+from cython_modules.cython_test import UCT as C_UCT
 
 
 class Convolutional(nn.Module):
@@ -130,8 +140,12 @@ class XOAgentModel(XOAgentBase):
 
     def get_policy_and_value(self, features):
         self.model.eval()
-        model_out = self.model(features)
-        return torch.split(model_out, [81, 1], dim=1)
+
+        features_tensor = torch.from_numpy(np.array(features)[np.newaxis])
+        features_tensor = features_tensor.to(torch.float32)
+        model_out = self.model(features_tensor)
+        output_policy, output_value = torch.split(model_out, [81, 1], dim=1)
+        return output_policy.cpu().detach().numpy().reshape((9, 9)), output_value.item()
 
 
 class XOAgentRandom(XOAgentBase):
@@ -139,66 +153,348 @@ class XOAgentRandom(XOAgentBase):
         self.rng = np.random.RandomState(seed)
 
     def get_policy_and_value(self, features) -> tuple:
-        # valid_moves_indices = game.get_valid_moves()
-        # # print(f"valid moves {valid_moves_indices}")
-        # random_choice = self.rng.randint(len(valid_moves_indices), size=1)[0]
-        # chosen_move = valid_moves_indices[random_choice]
-        # # print(f"{game.player} playing {chosen_move}")
-        pass
+        return torch.from_numpy(self.rng.rand(9, 9)), None
 
 
 def features_for_board_and_player(board, player):
-    features = deepcopy(board)
-    features[features != player] = 0
-    features[features != 0] = 1
+    features = np.zeros((9, 9))
+    features[board == player] = 1
     return features
 
 
-def get_features(board_states: deque):
-    current_player = board_states[-1][1]
-    opponent = board_states[-2][1]
-    features = []
-    for i in range(1, 3):
-        features.append(
-            features_for_board_and_player(board_states[-i][0], current_player)
+def get_features(game_state) -> npt.NDArray:
+    current_player = game_state[1]
+    opponent = 3 - current_player  # mafs lol
+    last_play = np.zeros((9, 9))
+    if game_state[2] is not None:
+        last_play[game_state[2][1], game_state[2][0]] = 1
+    features = [
+        features_for_board_and_player(game_state[0], current_player),
+        features_for_board_and_player(game_state[0], opponent),
+        last_play,
+    ]
+    return np.array(features)
+
+
+def edge_key(game_state, chosen_move):
+    return (get_features(game_state).tobytes(), chosen_move.tobytes())
+
+
+def node_key(game_state):
+    return get_features(game_state).tobytes()
+
+
+def game_state_from_game(game: XOGame):
+    return (np.array(game.board), game.player, game._last_move)
+
+
+def update_state(game_state, move):
+    game = XOGame(game_state)
+    game.play_current_player(move)
+    return game_state_from_game(game)
+
+
+def get_probabilities_array(agent_policy, valid_moves_array) -> npt.NDArray:
+    valid_moves = np.ma.masked_array(agent_policy, ~valid_moves_array)
+    return valid_moves / np.ma.sum(valid_moves)
+
+
+def get_valid_moves_from_array(valid_moves_array):
+    return np.flip(np.argwhere(valid_moves_array))
+
+
+def self_play(agent: XOAgentBase, games: int):
+
+    for n in range(games):
+        game = XOGame()
+        # Game state is (board, player to play, last move)
+        game_state = (deepcopy(game.board), 1, None)
+        # initialise features
+        features = get_features(game_state)
+        for i in range(81):
+            agent_policy, agent_value = agent.get_policy_and_value(features)
+
+            probabilities = get_probabilities_array(
+                agent_policy, game._valid_moves_array
+            )
+            chosen_move = np.flip(
+                np.unravel_index(probabilities.argmax(fill_value=-1), (9, 9))
+            )
+
+            game.play_current_player(chosen_move)
+
+            game_state = game_state_from_game(game)
+            features = get_features(game_state)
+
+            if game.winner is not None:
+                break
+
+    # print(f"Player {game.winner} wins!")
+    # print(game.board)
+    # print(features)
+
+
+class MCTS:
+    def __init__(self) -> None:
+        self.Q = defaultdict(float)
+        self.N = defaultdict(int)
+        self.W = defaultdict(float)
+        self.P = dict()  # is always created with a value
+        self.trajectories = dict()  # keys are features as bytes, values are list of moves
+        self.exploration = 1
+
+        self.timings = defaultdict(list)
+
+    def _get_edges_from_parent(self, game_state) -> list:
+        """Returns a list of edge keys originating from a game state"""
+        game = XOGame()
+        valid_moves_array, winner = game.valid_moves_array_and_winner_from_state(
+            game_state
         )
-        features.append(features_for_board_and_player(board_states[-i][0], opponent))
-    features_tensor = torch.from_numpy(np.array(features)[np.newaxis])
-    features_tensor = features_tensor.to(torch.float32)
-    return features_tensor
+        valid_moves = get_valid_moves_from_array(valid_moves_array)
+        return [edge_key(game_state, valid_move) for valid_move in valid_moves]
+
+    def _total_parent_N(self, game_state) -> list:
+        edges = self._get_edges_from_parent(game_state)
+        return [self.N[edge] for edge in edges]
+
+    def _uct_select(self, game_state):
+        DEFAULT_PARENT_VISITS = 1e-8
+
+        game = XOGame()
+
+        valid_moves_array, winner = game.valid_moves_array_and_winner_from_state(
+            game_state
+        )
+        valid_moves = get_valid_moves_from_array(valid_moves_array)
+
+        start = time.perf_counter()
+        assert all(edge_key(game_state, move) in self.P for move in valid_moves)
+        end = time.perf_counter()
+        self.timings["assert"].append(end - start)
+
+        # Modified from alphago zero paper to add a small number to uct so it's never zero.
+        def UCT(move):
+            edge = edge_key(game_state, move)
+            assert edge in self.Q
+
+            uct = (
+                self.exploration
+                * (
+                    math.sqrt(
+                        sum(
+                            self.N[edge_key(game_state, valid_move)]
+                            for valid_move in valid_moves
+                        )
+                        + DEFAULT_PARENT_VISITS
+                    )
+                    / (1 + self.N[edge])
+                )
+                + self.Q[edge]
+            )
+            return uct
+
+        def UCT_import(move):
+            # if len(self.timings["max"]) == 100:
+            #     import pickle
+
+            #     with open("sample_uct_input.obj", "wb") as f:
+            #         pickle.dump(
+            #             dict(
+            #                 move=move,
+            #                 exploration=self.exploration,
+            #                 game_state=game_state,
+            #                 valid_moves=valid_moves,
+            #                 N=self.N,
+            #                 Q=self.Q,
+            #             ),
+            #             f,
+            #         )
+            return C_UCT(
+                move, self.exploration, game_state, valid_moves, self.N, self.Q
+            )
+
+        start = time.perf_counter()
+        #print(list(map(lambda m : round(UCT_import(m), 2), valid_moves)))
+        #print(list(map(lambda m : round(UCT(m), 2), valid_moves)))
+        #print("\n")
+        # selected = max(valid_moves, key=lambda m : C_UCT(m, self.exploration, game_state, valid_moves, self.N, self.Q))
+        selected = max(valid_moves, key=UCT)
+        end = time.perf_counter()
+        self.timings["max"].append(end - start)
+
+        return selected
+
+    def _is_expanded(self, game_state):
+        return node_key(game_state) in self.trajectories
+
+    def _add_trajectory(self, node_key, move):
+        try:
+            self.trajectories[node_key].append(move)
+        except KeyError:
+            self.trajectories[node_key] = [move]
+
+    def _get_trajectories(self, game_state):
+        try:
+            return self.trajectories[node_key(game_state)]
+        except KeyError:
+            return []
+
+    def _select(self, game_state):
+        visited_edges = []
+        active_game_state = deepcopy(game_state)
+        while True:
+            if not self._is_expanded(active_game_state) or not self._get_trajectories(
+                active_game_state
+            ):
+                # reason = "not expanded" if not self._is_expanded(active_game_state) else "empty trajectories"
+                # print(f"Found unexpanded game state because {reason}")
+
+                # print(active_game_state)
+                return active_game_state, visited_edges
+            for move in self._get_trajectories(active_game_state):
+                if edge := edge_key(active_game_state, move) not in self.P:
+                    print("Found unexpanded child")
+                    assert False
+                    visited_edges.append(edge)
+                    return update_state(active_game_state, move), visited_edges
+            start = time.perf_counter()
+            move = self._uct_select(active_game_state)
+            end = time.perf_counter()
+            self.timings["uct_select"].append(end - start)
+            # print(f"Selected move {move} with uct")
+            visited_edges.append(edge_key(active_game_state, move))
+            # print("game state before update:")
+            # print(active_game_state)
+            active_game_state = update_state(active_game_state, move)
+            # print("Next game state after uct:")
+            # print(active_game_state)
+
+    def _expand(self, game_state, agent: XOAgentBase) -> float:
+        """Returns value evaluated by agent"""
+        game = XOGame()
+        agent_policy, value = agent.get_policy_and_value(get_features(game_state))
+        valid_moves_array = game.valid_moves_array_and_winner_from_state(game_state)[0]
+        valid_moves = get_valid_moves_from_array(valid_moves_array)
+        probabilities = get_probabilities_array(agent_policy, valid_moves_array)
+        for move in valid_moves:
+            # print(f"Adding move {move} to trajectories")
+            edge = edge_key(game_state, move)
+            self.Q[edge], self.N[edge], self.W[edge] = 0, 0, 0
+            self.P[edge] = probabilities[move[1], move[0]]
+            self._add_trajectory(node_key(game_state), move)
+        return value
+
+    def _backup(self, visited_edges: list, reward):
+        # print(f"backup {len(visited_edges)} edges")
+        for edge in reversed(visited_edges):
+            self.N[edge] += 1
+            self.W[edge] += reward
+            self.Q[edge] = self.W[edge] / self.N[edge]
+            reward = 1 - reward
+
+    def probabilities_for_state(self, game_state, agent: XOAgentBase, temp):
+        game = XOGame()
+        valid_moves_array, winner = game.valid_moves_array_and_winner_from_state(
+            game_state
+        )
+        valid_moves = get_valid_moves_from_array(valid_moves_array)
+
+        # Shouldn't be terminal
+        assert winner is None
+
+        root_visits = sum(self._total_parent_N(game_state))
+
+        # Also this shouldn't be called without running any searches
+        assert root_visits > 0
+        valid_moves_probabilities = [
+            self.N[edge_key(game_state, move)] / root_visits for move in valid_moves
+        ]
+        probabilities_array = np.zeros((9, 9))
+        probabilities_array[tuple(np.fliplr(valid_moves).T)] = valid_moves_probabilities
+        probabilities_array = np.power(probabilities_array, 1 / temp)
+        probabilities_array = probabilities_array / np.sum(probabilities_array)
+        return probabilities_array
+
+    def rollout(self, game_state, agent: XOAgentBase):
+        start = time.perf_counter()
+        leaf_game_state, visited_edges = self._select(game_state)
+        end = time.perf_counter()
+        self.timings["select"].append(end - start)
+        # print("Trajectories before expand:")
+        # print(self.trajectories.values())
+        start = time.perf_counter()
+        value = self._expand(leaf_game_state, agent)
+        end = time.perf_counter()
+        self.timings["expand"].append(end - start)
+        # print("Trajectories after expand:")
+        # print(self.trajectories.values())
+        start = time.perf_counter()
+        self._backup(visited_edges, value)
+        end = time.perf_counter()
+        self.timings["backup"].append(end - start)
+
+        # print("\n\n")
+
+    def select_new_parent(self, game_state, move):
+        edges_to_remove = self._get_edges_from_parent(game_state)
+        edges_to_remove.remove(edge_key(game_state, move))
+        for edge in edges_to_remove:
+            map(lambda x: x.pop(edge), (self.Q, self.N, self.W, self.P))
+
+        self.trajectories.pop(node_key(game_state))
+
+    def self_play(self, agent, rollouts_per_move=200):
+        game = XOGame()
+        training_states = []
+        for j in range(81):
+            game_state = game_state_from_game(game)
+            for i in range(rollouts_per_move):
+                if i % 20 == 0:
+                    print(f"{i/rollouts_per_move*100:.0f}%")
+                self.rollout(game_state, agent)
+
+            probabilities = self.probabilities_for_state(game_state, agent, 1)
+            chosen_move = np.flip(np.unravel_index(np.argmax(probabilities), shape=(9,9)))
+            training_states.append([get_features(game_state), probabilities])
+
+            game.play_current_player(chosen_move)
+
+            if game.winner is not None:
+                print(f"Player {game.winner} wins!")
+                print(game._large_board)
+                if game.winner == 1:
+                    reward = 1
+                elif game.winner == 2:
+                    reward = -1
+                else:
+                    reward = 0
+                for i in range(len(training_states)):
+                    training_states[i].append(reward)
+                    reward *= -1
+                break
+
+            self.select_new_parent(game_state, chosen_move)
+
+        return training_states
 
 
-def self_play(agent: XOAgentBase):
-    game = XOGame()
 
-    game_states = deque()
-    game_states.append((game.board, 2))
-    game_states.append((game.board, 1))
+def profiling():
+    net = Network(2 + 1, 32, 4)
+    agent = XOAgentModel(net)
+    game_state = game_state_from_game(XOGame())
 
-    for i in range(81):
-        features = get_features(game_states)
-
-        agent_policy, agent_value = agent.get_policy_and_value(features)
-        # print(agent_policy, agent_value)
-
-        agent_policy = agent_policy.cpu().detach().numpy().reshape((9, 9))
-        valid_moves = np.ma.masked_array(agent_policy, ~game._valid_moves)
-        chosen_move = np.flip(np.unravel_index(valid_moves.argmax(fill_value=-1), (9, 9)))
-
-        # print(chosen_move)
-
-        game.play_current_player(chosen_move)
-        game_states.popleft()
-        game_states.append((game.board, game.player))
-        if game.winner is not None:
-            break
-
-    print(f"Player {game.winner} wins!")
+    monte = MCTS()
+    rollouts = 200
+    for i in range(rollouts):
+        monte.rollout(game_state, agent)
 
 
-if __name__ == "__main__":
-    # feature planes of last 2 turns of 2 players
-    net = Network(2 * 2, 32, 4)
+def main():
+    # feature planes of current board state (first for current player, second for next)
+    # and one hot encoding of last move
+    net = Network(2 + 1, 32, 4)
 
     # policy = PolicyHead(32)
 
@@ -208,10 +504,21 @@ if __name__ == "__main__":
 
     agent = XOAgentModel(net)
 
-    # input = rand((1, 4, 9, 9))
+    # self_play(agent, 200)
 
-    # output = agent.get_policy_and_value(input)
+    game_state = game_state_from_game(XOGame())
 
-    # print(output)
+    monte = MCTS()
+    training_data = monte.self_play(agent, 100)
+    import matplotlib.pyplot as plt
 
-    self_play(agent)
+    for key in monte.timings.keys():
+        plt.plot(range(len(monte.timings[key])), monte.timings[key], label=key)
+    plt.legend()
+    plt.show()
+
+    breakpoint()
+
+
+if __name__ == "__main__":
+    main()
