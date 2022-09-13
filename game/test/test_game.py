@@ -14,8 +14,14 @@ def test_check_winning_play():
 
 
 def test_check_win():
-    win_board = np.array([2, 1, 1, 0, 2, 1, 1, 0, 2]).reshape((3, 3))
-    assert XOGame.check_win_from_scratch(win_board) == 2
+    win_2_board = np.array([2, 1, 1, 0, 2, 1, 1, 0, 2]).reshape((3, 3))
+    win_1_board = np.array([1, 1, 1, 0, 2, 1, 1, 0, 2]).reshape((3, 3))
+    win_none_board = np.array([0, 1, 1, 0, 2, 1, 1, 0, 2]).reshape((3, 3))
+    win_anti_diag_board = np.array([0, 0, 1, 0, 1, 0, 1, 0, 0]).reshape((3, 3))
+    assert XOGame.check_win_from_scratch(win_2_board) == 2
+    assert XOGame.check_win_from_scratch(win_1_board) == 1
+    assert XOGame.check_win_from_scratch(win_none_board) == None
+    assert XOGame.check_win_from_scratch(win_anti_diag_board) == 1
 
 
 def test_game():

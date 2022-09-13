@@ -5,6 +5,9 @@ from copy import deepcopy
 import time
 from collections import Counter
 
+import pyximport
+pyximport.install(setup_args={"include_dirs": np.get_include()})
+from cython_modules.cython_test import check_win_from_scratch as C_check_win_from_scratch
 
 class XOGame:
     def __init__(self, game_state=None) -> None:
@@ -147,7 +150,7 @@ class XOGame:
         print(self.board)
 
     @staticmethod
-    def check_win_from_scratch(board: npt.NDArray, players=[1, 2]) -> int:
+    def check_win_from_scratch_old(board: npt.NDArray, players=[1, 2]) -> int:
         for p in players:
             player_board: npt.NDArray = board == p
             for i in range(3):
@@ -167,22 +170,32 @@ class XOGame:
                 return p
         return None
 
-    def generate_large_board_from_board(self, board):
+    @staticmethod
+    def check_win_from_scratch(board):
+        w = XOGame.check_win_from_scratch_old(board)
+        wc = C_check_win_from_scratch(board)
+        wc = wc if wc != -1 else None
+        assert w == wc
+        return w
+
+    @staticmethod
+    def generate_large_board_from_board(board):
         large_board = np.zeros((3, 3))
 
         for x in range(3):
             for y in range(3):
                 small_board = board[3 * y : 3 * y + 3, 3 * x : 3 * x + 3]
-                win = self.check_win_from_scratch(small_board)
+                win = XOGame.check_win_from_scratch(small_board)
                 large_board[y, x] = 0 if win is None else win
         return large_board
 
-    def valid_moves_array_and_winner_from_state(self, game_state):
+    @staticmethod
+    def valid_moves_array_and_winner_from_state(game_state):
         board, player, last_move = game_state
-        large_board = self.generate_large_board_from_board(board)
-        winner = self.check_win_from_scratch(large_board)
+        large_board = XOGame.generate_large_board_from_board(board)
+        winner = XOGame.check_win_from_scratch(large_board)
 
-        large_coords = self._get_large_coords_for_next(last_move)
+        large_coords = XOGame._get_large_coords_for_next(last_move)
         if (
             large_coords is not None
             and large_board[large_coords[1], large_coords[0]] == 0

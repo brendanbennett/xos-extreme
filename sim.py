@@ -173,7 +173,7 @@ def get_features(game_state) -> npt.NDArray:
         features_for_board_and_player(game_state[0], opponent),
         last_play,
     ]
-    return np.array(features)
+    return np.array(features, dtype=int)
 
 
 def edge_key(game_state, chosen_move):
@@ -247,8 +247,7 @@ class MCTS:
 
     def _get_edges_from_parent(self, game_state) -> list:
         """Returns a list of edge keys originating from a game state"""
-        game = XOGame()
-        valid_moves_array, winner = game.valid_moves_array_and_winner_from_state(
+        valid_moves_array, winner = XOGame.valid_moves_array_and_winner_from_state(
             game_state
         )
         valid_moves = get_valid_moves_from_array(valid_moves_array)
@@ -261,17 +260,15 @@ class MCTS:
     def _uct_select(self, game_state):
         DEFAULT_PARENT_VISITS = 1e-8
 
-        game = XOGame()
-
-        valid_moves_array, winner = game.valid_moves_array_and_winner_from_state(
+        valid_moves_array, winner = XOGame.valid_moves_array_and_winner_from_state(
             game_state
         )
         valid_moves = get_valid_moves_from_array(valid_moves_array)
 
-        start = time.perf_counter()
+        # start = time.perf_counter()
         assert all(edge_key(game_state, move) in self.P for move in valid_moves)
-        end = time.perf_counter()
-        self.timings["assert"].append(end - start)
+        # end = time.perf_counter()
+        # self.timings["assert"].append(end - start)
 
         # Modified from alphago zero paper to add a small number to uct so it's never zero.
         def UCT(move):
@@ -294,34 +291,19 @@ class MCTS:
             )
             return uct
 
-        def UCT_import(move):
-            # if len(self.timings["max"]) == 100:
-            #     import pickle
-
-            #     with open("sample_uct_input.obj", "wb") as f:
-            #         pickle.dump(
-            #             dict(
-            #                 move=move,
-            #                 exploration=self.exploration,
-            #                 game_state=game_state,
-            #                 valid_moves=valid_moves,
-            #                 N=self.N,
-            #                 Q=self.Q,
-            #             ),
-            #             f,
-            #         )
+        def UCT_import(move, exploration=self.exploration, game_state=game_state, valid_moves=valid_moves, N=self.N, Q=self.Q):
             return C_UCT(
-                move, self.exploration, game_state, valid_moves, self.N, self.Q
+                move, exploration, game_state, valid_moves, N, Q
             )
 
-        start = time.perf_counter()
+        # start = time.perf_counter()
         #print(list(map(lambda m : round(UCT_import(m), 2), valid_moves)))
         #print(list(map(lambda m : round(UCT(m), 2), valid_moves)))
         #print("\n")
         # selected = max(valid_moves, key=lambda m : C_UCT(m, self.exploration, game_state, valid_moves, self.N, self.Q))
-        selected = max(valid_moves, key=UCT)
-        end = time.perf_counter()
-        self.timings["max"].append(end - start)
+        selected = max(valid_moves, key=UCT_import)
+        # end = time.perf_counter()
+        # self.timings["max"].append(end - start)
 
         return selected
 
@@ -358,10 +340,10 @@ class MCTS:
                     assert False
                     visited_edges.append(edge)
                     return update_state(active_game_state, move), visited_edges
-            start = time.perf_counter()
+            # start = time.perf_counter()
             move = self._uct_select(active_game_state)
-            end = time.perf_counter()
-            self.timings["uct_select"].append(end - start)
+            # end = time.perf_counter()
+            # self.timings["uct_select"].append(end - start)
             # print(f"Selected move {move} with uct")
             visited_edges.append(edge_key(active_game_state, move))
             # print("game state before update:")
@@ -372,9 +354,8 @@ class MCTS:
 
     def _expand(self, game_state, agent: XOAgentBase) -> float:
         """Returns value evaluated by agent"""
-        game = XOGame()
         agent_policy, value = agent.get_policy_and_value(get_features(game_state))
-        valid_moves_array = game.valid_moves_array_and_winner_from_state(game_state)[0]
+        valid_moves_array = XOGame.valid_moves_array_and_winner_from_state(game_state)[0]
         valid_moves = get_valid_moves_from_array(valid_moves_array)
         probabilities = get_probabilities_array(agent_policy, valid_moves_array)
         for move in valid_moves:
@@ -394,8 +375,7 @@ class MCTS:
             reward = 1 - reward
 
     def probabilities_for_state(self, game_state, agent: XOAgentBase, temp):
-        game = XOGame()
-        valid_moves_array, winner = game.valid_moves_array_and_winner_from_state(
+        valid_moves_array, winner = XOGame.valid_moves_array_and_winner_from_state(
             game_state
         )
         valid_moves = get_valid_moves_from_array(valid_moves_array)
@@ -417,22 +397,22 @@ class MCTS:
         return probabilities_array
 
     def rollout(self, game_state, agent: XOAgentBase):
-        start = time.perf_counter()
+        # start = time.perf_counter()
         leaf_game_state, visited_edges = self._select(game_state)
-        end = time.perf_counter()
-        self.timings["select"].append(end - start)
+        # end = time.perf_counter()
+        # self.timings["select"].append(end - start)
         # print("Trajectories before expand:")
         # print(self.trajectories.values())
-        start = time.perf_counter()
+        # start = time.perf_counter()
         value = self._expand(leaf_game_state, agent)
-        end = time.perf_counter()
-        self.timings["expand"].append(end - start)
+        # end = time.perf_counter()
+        # self.timings["expand"].append(end - start)
         # print("Trajectories after expand:")
         # print(self.trajectories.values())
-        start = time.perf_counter()
+        # start = time.perf_counter()
         self._backup(visited_edges, value)
-        end = time.perf_counter()
-        self.timings["backup"].append(end - start)
+        # end = time.perf_counter()
+        # self.timings["backup"].append(end - start)
 
         # print("\n\n")
 
@@ -448,10 +428,11 @@ class MCTS:
         game = XOGame()
         training_states = []
         for j in range(81):
+            print(f"Move {j+1}")
             game_state = game_state_from_game(game)
             for i in range(rollouts_per_move):
-                if i % 20 == 0:
-                    print(f"{i/rollouts_per_move*100:.0f}%")
+                # if i % 20 == 0:
+                #     print(f"{i/rollouts_per_move*100:.0f}%")
                 self.rollout(game_state, agent)
 
             probabilities = self.probabilities_for_state(game_state, agent, 1)
@@ -509,13 +490,14 @@ def main():
     game_state = game_state_from_game(XOGame())
 
     monte = MCTS()
-    training_data = monte.self_play(agent, 100)
-    import matplotlib.pyplot as plt
+    training_data = monte.self_play(agent, 200)
 
-    for key in monte.timings.keys():
-        plt.plot(range(len(monte.timings[key])), monte.timings[key], label=key)
-    plt.legend()
-    plt.show()
+    # import matplotlib.pyplot as plt
+
+    # for key in monte.timings.keys():
+    #     plt.plot(range(len(monte.timings[key])), monte.timings[key], label=key)
+    # plt.legend()
+    # plt.show()
 
     breakpoint()
 
