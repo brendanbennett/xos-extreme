@@ -78,11 +78,6 @@ cdef int C_check_win_from_scratch(board):
             return 1
     sum1 = np.sum(new_board.diagonal())
     sum2 = np.sum(np.fliplr(new_board).diagonal())
-    print(board)
-    print(np.fliplr(new_board))
-    print(np.fliplr(new_board).diagonal())
-    print(f"sum1 {sum1}")
-    print(f"sum2 {sum2}")
     if sum1 == 3 or sum2 == 3:
         return 2
     elif sum1 == -3 or sum2 == -3:
