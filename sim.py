@@ -11,8 +11,11 @@ import numpy.typing as npt
 from collections import defaultdict
 import math
 import time
+from pathlib import Path
+import pickle
 
 import pyximport
+
 pyximport.install(setup_args={"include_dirs": np.get_include()})
 from cython_modules.cython_test import UCT as C_UCT
 
@@ -240,7 +243,9 @@ class MCTS:
         self.N = defaultdict(int)
         self.W = defaultdict(float)
         self.P = dict()  # is always created with a value
-        self.trajectories = dict()  # keys are features as bytes, values are list of moves
+        self.trajectories = (
+            dict()
+        )  # keys are features as bytes, values are list of moves
         self.exploration = 1
 
         self.timings = defaultdict(list)
@@ -291,15 +296,20 @@ class MCTS:
             )
             return uct
 
-        def UCT_import(move, exploration=self.exploration, game_state=game_state, valid_moves=valid_moves, N=self.N, Q=self.Q):
-            return C_UCT(
-                move, exploration, game_state, valid_moves, N, Q
-            )
+        def UCT_import(
+            move,
+            exploration=self.exploration,
+            game_state=game_state,
+            valid_moves=valid_moves,
+            N=self.N,
+            Q=self.Q,
+        ):
+            return C_UCT(move, exploration, game_state, valid_moves, N, Q)
 
         # start = time.perf_counter()
-        #print(list(map(lambda m : round(UCT_import(m), 2), valid_moves)))
-        #print(list(map(lambda m : round(UCT(m), 2), valid_moves)))
-        #print("\n")
+        # print(list(map(lambda m : round(UCT_import(m), 2), valid_moves)))
+        # print(list(map(lambda m : round(UCT(m), 2), valid_moves)))
+        # print("\n")
         # selected = max(valid_moves, key=lambda m : C_UCT(m, self.exploration, game_state, valid_moves, self.N, self.Q))
         selected = max(valid_moves, key=UCT_import)
         # end = time.perf_counter()
@@ -334,12 +344,6 @@ class MCTS:
 
                 # print(active_game_state)
                 return active_game_state, visited_edges
-            for move in self._get_trajectories(active_game_state):
-                if edge := edge_key(active_game_state, move) not in self.P:
-                    print("Found unexpanded child")
-                    assert False
-                    visited_edges.append(edge)
-                    return update_state(active_game_state, move), visited_edges
             # start = time.perf_counter()
             move = self._uct_select(active_game_state)
             # end = time.perf_counter()
@@ -355,7 +359,9 @@ class MCTS:
     def _expand(self, game_state, agent: XOAgentBase) -> float:
         """Returns value evaluated by agent"""
         agent_policy, value = agent.get_policy_and_value(get_features(game_state))
-        valid_moves_array = XOGame.valid_moves_array_and_winner_from_state(game_state)[0]
+        valid_moves_array = XOGame.valid_moves_array_and_winner_from_state(game_state)[
+            0
+        ]
         valid_moves = get_valid_moves_from_array(valid_moves_array)
         probabilities = get_probabilities_array(agent_policy, valid_moves_array)
         for move in valid_moves:
@@ -428,7 +434,7 @@ class MCTS:
         game = XOGame()
         training_states = []
         for j in range(81):
-            print(f"Move {j+1}")
+            # print(f"Move {j+1}")
             game_state = game_state_from_game(game)
             for i in range(rollouts_per_move):
                 # if i % 20 == 0:
@@ -436,7 +442,9 @@ class MCTS:
                 self.rollout(game_state, agent)
 
             probabilities = self.probabilities_for_state(game_state, agent, 1)
-            chosen_move = np.flip(np.unravel_index(np.argmax(probabilities), shape=(9,9)))
+            chosen_move = np.flip(
+                np.unravel_index(np.argmax(probabilities), shape=(9, 9))
+            )
             training_states.append([get_features(game_state), probabilities])
 
             game.play_current_player(chosen_move)
@@ -460,7 +468,6 @@ class MCTS:
         return training_states
 
 
-
 def profiling():
     net = Network(2 + 1, 32, 4)
     agent = XOAgentModel(net)
@@ -470,6 +477,39 @@ def profiling():
     rollouts = 200
     for i in range(rollouts):
         monte.rollout(game_state, agent)
+
+
+def save_training_data(
+    list_of_self_play_games,
+    agent_revision: int,
+    chunk_size=32,
+    training_dir="training_data",
+):
+    revisions_paths = [x for x in Path(".", training_dir).iterdir() if x.is_dir()]
+    revision_path = Path(".", training_dir, str(agent_revision))
+    if revision_path not in revisions_paths:
+        revision_path.mkdir()
+
+    chunk_paths = [
+        x for x in revision_path.iterdir() if x.is_file() and x.suffix == ".obj"
+    ]
+    chunk_idxs = [
+        (int(path.stem.split("_")[-2]), int(path.stem.split("_")[-1]))
+        for path in chunk_paths
+    ]
+
+    new_chunk_start_offset = (
+        0 if len(chunk_idxs) == 0 else sorted(chunk_idxs, key=lambda i: i[1])[-1][1] + 1
+    )
+
+    for chunk_start in range(0, len(list_of_self_play_games), chunk_size):
+        try:
+            chunk = list_of_self_play_games[chunk_start : chunk_start + chunk_size]
+        except KeyError:
+            chunk = list_of_self_play_games[chunk_start:]
+        name = f"training_data_{new_chunk_start_offset + chunk_start}_{new_chunk_start_offset + chunk_start + len(chunk) - 1}.obj"
+        with open(Path(revision_path, name), "wb") as f:
+            pickle.dump(chunk, f)
 
 
 def main():
@@ -490,7 +530,11 @@ def main():
     game_state = game_state_from_game(XOGame())
 
     monte = MCTS()
-    training_data = monte.self_play(agent, 200)
+    list_training_data = []
+    while True:
+        for i in range(8):
+            list_training_data.append(monte.self_play(agent, 200))
+        save_training_data(list_training_data, 0)
 
     # import matplotlib.pyplot as plt
 

@@ -172,11 +172,11 @@ class XOGame:
 
     @staticmethod
     def check_win_from_scratch(board):
-        w = XOGame.check_win_from_scratch_old(board)
+        # w = XOGame.check_win_from_scratch_old(board)
         wc = C_check_win_from_scratch(board)
         wc = wc if wc != -1 else None
-        assert w == wc
-        return w
+        # assert w == wc
+        return wc
 
     @staticmethod
     def generate_large_board_from_board(board):
