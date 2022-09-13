@@ -57,7 +57,7 @@ def UCT(move, exploration, game_state, valid_moves, N, Q):
 @cython.boundscheck(False)
 @cython.wraparound(False)
 cdef int C_check_win_from_scratch(board):
-    cdef np.ndarray[DTYPE_int_t, ndim=2] new_board = np.zeros((9, 9), dtype=DTYPE_int)
+    cdef np.ndarray[DTYPE_int_t, ndim=2] new_board = np.zeros((3, 3), dtype=DTYPE_int)
     cdef int sum1
     cdef int sum2
     cdef int e
@@ -78,6 +78,11 @@ cdef int C_check_win_from_scratch(board):
             return 1
     sum1 = np.sum(new_board.diagonal())
     sum2 = np.sum(np.fliplr(new_board).diagonal())
+    print(board)
+    print(np.fliplr(new_board))
+    print(np.fliplr(new_board).diagonal())
+    print(f"sum1 {sum1}")
+    print(f"sum2 {sum2}")
     if sum1 == 3 or sum2 == 3:
         return 2
     elif sum1 == -3 or sum2 == -3:
