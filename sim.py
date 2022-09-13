@@ -10,9 +10,9 @@ import pickle
 from agent import XOAgentBase, XOAgentModel, Network
 
 import pyximport
-
 pyximport.install(setup_args={"include_dirs": np.get_include()})
 from cython_modules.cython_test import UCT as C_UCT
+from cython_modules.cython_test import get_features
 
 def features_for_board_and_player(board, player):
     features = np.zeros((9, 9))
@@ -20,26 +20,12 @@ def features_for_board_and_player(board, player):
     return features
 
 
-def get_features(game_state) -> npt.NDArray:
-    current_player = game_state[1]
-    opponent = 3 - current_player  # mafs lol
-    last_play = np.zeros((9, 9))
-    if game_state[2] is not None:
-        last_play[game_state[2][1], game_state[2][0]] = 1
-    features = [
-        features_for_board_and_player(game_state[0], current_player),
-        features_for_board_and_player(game_state[0], opponent),
-        last_play,
-    ]
-    return np.array(features, dtype=int)
+def edge_key(features, chosen_move):
+    return (features.tobytes(), chosen_move.tobytes())
 
 
-def edge_key(game_state, chosen_move):
-    return (get_features(game_state).tobytes(), chosen_move.tobytes())
-
-
-def node_key(game_state):
-    return get_features(game_state).tobytes()
+def node_key(features):
+    return features.tobytes()
 
 
 def game_state_from_game(game: XOGame):
@@ -60,38 +46,6 @@ def get_probabilities_array(agent_policy, valid_moves_array) -> npt.NDArray:
 def get_valid_moves_from_array(valid_moves_array):
     return np.flip(np.argwhere(valid_moves_array))
 
-
-def self_play(agent: XOAgentBase, games: int):
-
-    for n in range(games):
-        game = XOGame()
-        # Game state is (board, player to play, last move)
-        game_state = (deepcopy(game.board), 1, None)
-        # initialise features
-        features = get_features(game_state)
-        for i in range(81):
-            agent_policy, agent_value = agent.get_policy_and_value(features)
-
-            probabilities = get_probabilities_array(
-                agent_policy, game._valid_moves_array
-            )
-            chosen_move = np.flip(
-                np.unravel_index(probabilities.argmax(fill_value=-1), (9, 9))
-            )
-
-            game.play_current_player(chosen_move)
-
-            game_state = game_state_from_game(game)
-            features = get_features(game_state)
-
-            if game.winner is not None:
-                break
-
-    # print(f"Player {game.winner} wins!")
-    # print(game.board)
-    # print(features)
-
-
 class MCTS:
     def __init__(self) -> None:
         self.Q = defaultdict(float)
@@ -111,7 +65,7 @@ class MCTS:
             game_state
         )
         valid_moves = get_valid_moves_from_array(valid_moves_array)
-        return [edge_key(game_state, valid_move) for valid_move in valid_moves]
+        return [edge_key(get_features(game_state), valid_move) for valid_move in valid_moves]
 
     def _total_parent_N(self, game_state) -> list:
         edges = self._get_edges_from_parent(game_state)
@@ -126,13 +80,13 @@ class MCTS:
         valid_moves = get_valid_moves_from_array(valid_moves_array)
 
         # start = time.perf_counter()
-        assert all(edge_key(game_state, move) in self.P for move in valid_moves)
+        assert all(edge_key(get_features(game_state), move) in self.P for move in valid_moves)
         # end = time.perf_counter()
         # self.timings["assert"].append(end - start)
 
         # Modified from alphago zero paper to add a small number to uct so it's never zero.
         def UCT(move):
-            edge = edge_key(game_state, move)
+            edge = edge_key(get_features(game_state), move)
             assert edge in self.Q
 
             uct = (
@@ -140,7 +94,7 @@ class MCTS:
                 * (
                     math.sqrt(
                         sum(
-                            self.N[edge_key(game_state, valid_move)]
+                            self.N[edge_key(get_features(game_state), valid_move)]
                             for valid_move in valid_moves
                         )
                         + DEFAULT_PARENT_VISITS
@@ -172,8 +126,8 @@ class MCTS:
 
         return selected
 
-    def _is_expanded(self, game_state):
-        return node_key(game_state) in self.trajectories
+    def _is_expanded(self, features):
+        return node_key(features) in self.trajectories
 
     def _add_trajectory(self, node_key, move):
         try:
@@ -183,15 +137,16 @@ class MCTS:
 
     def _get_trajectories(self, game_state):
         try:
-            return self.trajectories[node_key(game_state)]
+            return self.trajectories[node_key(get_features(game_state))]
         except KeyError:
             return []
 
     def _select(self, game_state):
         visited_edges = []
         active_game_state = deepcopy(game_state)
+        features = get_features(active_game_state)
         while True:
-            if not self._is_expanded(active_game_state) or not self._get_trajectories(
+            if not self._is_expanded(features) or not self._get_trajectories(
                 active_game_state
             ):
                 # reason = "not expanded" if not self._is_expanded(active_game_state) else "empty trajectories"
@@ -204,16 +159,18 @@ class MCTS:
             # end = time.perf_counter()
             # self.timings["uct_select"].append(end - start)
             # print(f"Selected move {move} with uct")
-            visited_edges.append(edge_key(active_game_state, move))
+            visited_edges.append(edge_key(features, move))
             # print("game state before update:")
             # print(active_game_state)
             active_game_state = update_state(active_game_state, move)
+            features = get_features(active_game_state)
             # print("Next game state after uct:")
             # print(active_game_state)
 
     def _expand(self, game_state, agent: XOAgentBase) -> float:
         """Returns value evaluated by agent"""
-        agent_policy, value = agent.get_policy_and_value(get_features(game_state))
+        features = get_features(game_state)
+        agent_policy, value = agent.get_policy_and_value(features)
 
         valid_moves_array = XOGame.valid_moves_array_and_winner_from_state(game_state)[
             0
@@ -223,10 +180,10 @@ class MCTS:
             probabilities = get_probabilities_array(agent_policy, valid_moves_array)
             for move in valid_moves:
                 # print(f"Adding move {move} to trajectories")
-                edge = edge_key(game_state, move)
+                edge = edge_key(features, move)
                 self.Q[edge], self.N[edge], self.W[edge] = 0, 0, 0
                 self.P[edge] = probabilities[move[1], move[0]]
-                self._add_trajectory(node_key(game_state), move)
+                self._add_trajectory(node_key(features), move)
         return value
 
     def _backup(self, visited_edges: list, reward):
@@ -251,7 +208,7 @@ class MCTS:
         # Also this shouldn't be called without running any searches
         assert root_visits > 0
         valid_moves_probabilities = [
-            self.N[edge_key(game_state, move)] / root_visits for move in valid_moves
+            self.N[edge_key(get_features(game_state), move)] / root_visits for move in valid_moves
         ]
         probabilities_array = np.zeros((9, 9))
         probabilities_array[tuple(np.fliplr(valid_moves).T)] = valid_moves_probabilities
@@ -280,12 +237,13 @@ class MCTS:
         # print("\n\n")
 
     def select_new_parent(self, game_state, move):
+        features = get_features(game_state)
         edges_to_remove = self._get_edges_from_parent(game_state)
-        edges_to_remove.remove(edge_key(game_state, move))
+        edges_to_remove.remove(edge_key(features, move))
         for edge in edges_to_remove:
             map(lambda x: x.pop(edge), (self.Q, self.N, self.W, self.P))
 
-        self.trajectories.pop(node_key(game_state))
+        self.trajectories.pop(node_key(features))
 
     def self_play(self, agent, rollouts_per_move=200):
         game = XOGame()
@@ -373,13 +331,6 @@ def main():
     # feature planes of current board state (first for current player, second for next)
     # and one hot encoding of last move
     net = Network(2 + 1, 32, 4)
-
-    # policy = PolicyHead(32)
-
-    # summary(policy, (32, 1, 1))
-
-    # summary(net, (4, 9, 9))
-
     agent = XOAgentModel(net)
 
     monte = MCTS()
@@ -387,18 +338,8 @@ def main():
     while True:
         list_training_data = []
         for i in range(8):
-            list_training_data.append(monte.self_play(agent, 200))
+            list_training_data.append(monte.self_play(agent, 400))
         save_training_data(list_training_data, 0)
-
-    # import matplotlib.pyplot as plt
-
-    # for key in monte.timings.keys():
-    #     plt.plot(range(len(monte.timings[key])), monte.timings[key], label=key)
-    # plt.legend()
-    # plt.show()
-
-    breakpoint()
-
 
 if __name__ == "__main__":
     main()

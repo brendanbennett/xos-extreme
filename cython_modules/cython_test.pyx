@@ -24,7 +24,7 @@ cdef inline np.ndarray[DTYPE_int_t, ndim=2] features_for_board_and_player(np.nda
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-cdef np.ndarray[DTYPE_int_t, ndim=3] get_features(game_state):
+cdef np.ndarray[DTYPE_int_t, ndim=3] C_get_features(game_state):
     cdef int current_player = game_state[1]
     cdef int opponent = 3 - current_player  # mafs lol
     cdef np.ndarray[DTYPE_int_t, ndim=2] last_play = np.zeros((9, 9), dtype=DTYPE_int)
@@ -38,21 +38,28 @@ cdef np.ndarray[DTYPE_int_t, ndim=3] get_features(game_state):
     ]
     return np.array(features, dtype=DTYPE_int)
 
-def edge_key(game_state, chosen_move):
-    return (get_features(game_state).tobytes(), chosen_move.tobytes())
+def get_features(game_state):
+    return C_get_features(game_state)
 
-def UCT(move, exploration, game_state, valid_moves, N, Q):
+def edge_key(features, chosen_move):
+    return (features.tobytes(), chosen_move.tobytes())
+
+def C_UCT(move, exploration, game_state, valid_moves, N, Q):
     DEFAULT_PARENT_VISITS = 1e-8 * random.uniform(0.5,1)
 
-    edge = edge_key(game_state, move)
+    features = get_features(game_state)
+    edge = edge_key(features, move)
 
     assert edge in Q
 
     uct = exploration * (
-        math.sqrt(sum(N[edge_key(game_state, valid_move)] for valid_move in valid_moves)+DEFAULT_PARENT_VISITS)
+        math.sqrt(sum(N[edge_key(features, valid_move)] for valid_move in valid_moves)+DEFAULT_PARENT_VISITS)
         / (1 + N[edge])
     ) + Q[edge]
     return uct
+
+def UCT(move, exploration, game_state, valid_moves, N, Q):
+    return C_UCT(move, exploration, game_state, valid_moves, N, Q)
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
