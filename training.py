@@ -2,12 +2,14 @@ from itertools import chain
 from pathlib import Path
 import pickle
 from random import shuffle
+from re import fullmatch
 from sched import scheduler
 
 from torch.utils.data import Dataset, DataLoader, random_split
 import torch
 
 from agent import Network, XOAgentModel
+from sim import TRAINING_DATA_RE
 
 
 class TrainingDataset(Dataset):
@@ -32,7 +34,7 @@ class TrainingDataset(Dataset):
             raise IOError(f"No saved data for revision {revision}")
 
         chunk_paths = [
-            x for x in revision_path.iterdir() if x.is_file() and x.suffix == ".obj"
+            x for x in revision_path.iterdir() if x.is_file() and fullmatch(TRAINING_DATA_RE, x.name)
         ]
         chunk_idxs = [
             (int(path.stem.split("_")[-2]), int(path.stem.split("_")[-1]))

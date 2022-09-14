@@ -8,11 +8,14 @@ import time
 from pathlib import Path
 import pickle
 from agent import XOAgentBase, XOAgentModel, Network
+from re import compile, fullmatch
 
 import pyximport
 pyximport.install(setup_args={"include_dirs": np.get_include()})
 from cython_modules.cython_test import UCT as C_UCT
 from cython_modules.cython_test import get_features
+
+TRAINING_DATA_RE = compile("training_data_\d+_\d+\.obj")
 
 def features_for_board_and_player(board, player):
     features = np.zeros((9, 9))
@@ -306,7 +309,7 @@ def save_training_data(
         revision_path.mkdir()
 
     chunk_paths = [
-        x for x in revision_path.iterdir() if x.is_file() and x.suffix == ".obj"
+        x for x in revision_path.iterdir() if x.is_file() and fullmatch(TRAINING_DATA_RE, x.name)
     ]
     chunk_idxs = [
         (int(path.stem.split("_")[-2]), int(path.stem.split("_")[-1]))
@@ -323,6 +326,7 @@ def save_training_data(
         except KeyError:
             chunk = list_of_self_play_games[chunk_start:]
         name = f"training_data_{new_chunk_start_offset + chunk_start}_{new_chunk_start_offset + chunk_start + len(chunk) - 1}.obj"
+        assert fullmatch(TRAINING_DATA_RE, name)
         print(f"Saving {name}")
         with open(Path(revision_path, name), "wb") as f:
             pickle.dump(chunk, f)
