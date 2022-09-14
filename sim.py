@@ -194,7 +194,7 @@ class MCTS:
             self.Q[edge] = self.W[edge] / self.N[edge]
             reward = 1 - reward
 
-    def probabilities_for_state(self, game_state, agent: XOAgentBase, temp):
+    def probabilities_for_state(self, game_state, temp):
         valid_moves_array, winner = XOGame.valid_moves_array_and_winner_from_state(
             game_state
         )
@@ -243,20 +243,20 @@ class MCTS:
         for edge in edges_to_remove:
             map(lambda x: x.pop(edge), (self.Q, self.N, self.W, self.P))
 
-        self.trajectories.pop(node_key(features))
+        self.trajectories.pop(node_key(features), None)
 
     def self_play(self, agent, rollouts_per_move=200):
         game = XOGame()
         training_states = []
         for j in range(81):
-            print(f"Move {j+1}")
+            # print(f"Move {j+1}")
             game_state = game_state_from_game(game)
             for i in range(rollouts_per_move):
                 # if i % 20 == 0:
                 #     print(f"{i/rollouts_per_move*100:.0f}%")
                 self.rollout(game_state, agent)
 
-            probabilities = self.probabilities_for_state(game_state, agent, 1)
+            probabilities = self.probabilities_for_state(game_state, 1)
             chosen_move = np.flip(
                 np.unravel_index(np.argmax(probabilities), shape=(9, 9))
             )
@@ -266,7 +266,7 @@ class MCTS:
 
             if game.winner is not None:
                 print(f"Player {game.winner} wins!")
-                print(game._large_board)
+                # print(game._large_board)
                 if game.winner == 1:
                     reward = 1
                 elif game.winner == 2:
@@ -323,23 +323,64 @@ def save_training_data(
         except KeyError:
             chunk = list_of_self_play_games[chunk_start:]
         name = f"training_data_{new_chunk_start_offset + chunk_start}_{new_chunk_start_offset + chunk_start + len(chunk) - 1}.obj"
+        print(f"Saving {name}")
         with open(Path(revision_path, name), "wb") as f:
             pickle.dump(chunk, f)
+
+def evaluate_agents(agent1: XOAgentBase, agent2: XOAgentBase, games: int = 40, rollouts_per_move: int = 200):
+    MCTS_1 = MCTS()
+    MCTS_2 = MCTS()
+
+    winners = {0: 0, 1: 0, 2: 0}
+    # agent1 starts as player 1
+    for game_num in range(games):
+        game = XOGame()
+        first_player_agent = 1
+        for i in range(81):
+            current_agent_idx = (first_player_agent + i + 1) % 2 + 1
+            current_MCTS = MCTS_1 if current_agent_idx == 1 else MCTS_2
+            opponent_MCTS = MCTS_2 if current_agent_idx == 1 else MCTS_1
+            current_agent = agent1 if current_agent_idx == 1 else agent2
+            game_state = game_state_from_game(game)
+            for i in range(rollouts_per_move):
+                current_MCTS.rollout(game_state, current_agent)
+
+            probabilities = current_MCTS.probabilities_for_state(game_state, 1)
+            chosen_move = np.flip(
+                np.unravel_index(np.argmax(probabilities), shape=(9, 9))
+            )
+
+            game.play_current_player(chosen_move)
+
+            if game.winner is not None:
+                winning_agent_idx = (first_player_agent + game.winner) % 2 + 1
+                winning_agent_idx = 0 if game.winner == 0 else int(winning_agent_idx)
+                print(f"Agent {winning_agent_idx} wins game {game_num + 1}")
+                winners[winning_agent_idx] += 1
+                break
+            
+            current_MCTS.select_new_parent(game_state, chosen_move)
+            opponent_MCTS.select_new_parent(game_state, chosen_move)
+        first_player_agent = 2 - first_player_agent
+    return winners
 
 
 def main():
     # feature planes of current board state (first for current player, second for next)
     # and one hot encoding of last move
-    net = Network(2 + 1, 32, 4)
-    agent = XOAgentModel(net)
+    # net = Network(2 + 1, 32, 4)
+    # agent = XOAgentModel(net)
 
-    monte = MCTS()
+    # monte = MCTS()
     
-    while True:
-        list_training_data = []
-        for i in range(8):
-            list_training_data.append(monte.self_play(agent, 400))
-        save_training_data(list_training_data, 0)
+    # while True:
+    #     list_training_data = []
+    #     for i in range(8):
+    #         list_training_data.append(monte.self_play(agent, 200))
+    #     save_training_data(list_training_data, 0)
+
+    evaluate_agents(XOAgentModel(Network()), XOAgentModel(Network()), games=4, rollouts_per_move=100)
+    breakpoint()
 
 if __name__ == "__main__":
     main()

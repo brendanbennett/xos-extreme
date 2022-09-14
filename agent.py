@@ -87,7 +87,7 @@ class ValueHead(nn.Module):
 
 class Network(nn.Module):
     def __init__(
-        self, feature_planes: int, conv_filters: int, n_residuals: int
+        self, feature_planes: int = 3, conv_filters: int = 32, n_residuals: int = 4
     ) -> None:
         super().__init__()
 
@@ -131,6 +131,10 @@ class XOAgentModel(XOAgentBase):
         model_out = self.model(features_tensor)
         output_policy, output_value = torch.split(model_out, [81, 1], dim=1)
         return output_policy.cpu().detach().numpy().reshape((9, 9)), output_value.item()
+
+    @staticmethod
+    def policy_and_value_to_model_out(policy, value):
+        return torch.from_numpy(np.concatenate((policy.flatten(), [value]))[np.newaxis]).to(torch.float32)
 
 
 class XOAgentRandom(XOAgentBase):
