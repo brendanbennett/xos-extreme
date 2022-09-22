@@ -21,17 +21,22 @@ class TrainingDataset(Dataset):
     ) -> None:
         self.training_dir = training_dir
         self.num_to_load = num_to_load
-        self.training_data = self.load_training_data(
-            revision, training_dir, num_to_load
-        )
-
-    def load_training_data(self, revision, training_dir, num_to_load) -> dict:
-        revisions_paths = [x for x in Path(".", training_dir).iterdir() if x.is_dir()]
+        self.revision = self.get_revision(revision)
+        self.training_data = self.load_training_data()
+        
+    def get_revision(self, revision: int | None = None) -> int:
+        revisions_paths = [x for x in Path(".", self.training_dir).iterdir() if x.is_dir()]
         if revision is None:
             revision = max([int(path.stem) for path in revisions_paths])
-        revision_path = Path(".", training_dir, str(revision))
+            print(f"Using latest revision: {revision}")
+
+        return revision
+
+    def load_training_data(self) -> dict:
+        revisions_paths = [x for x in Path(".", self.training_dir).iterdir() if x.is_dir()]
+        revision_path = Path(".", self.training_dir, str(self.revision))
         if revision_path not in revisions_paths:
-            raise IOError(f"No saved data for revision {revision}")
+            raise IOError(f"No saved data for revision {self.revision}")
 
         chunk_paths = [
             x for x in revision_path.iterdir() if x.is_file() and fullmatch(TRAINING_DATA_RE, x.name)
@@ -46,7 +51,7 @@ class TrainingDataset(Dataset):
         to_load: list[Path] = []
         running_tot = 0
         for i, (start, stop) in enumerate(chunk_idxs):
-            if running_tot < num_to_load:
+            if running_tot < self.num_to_load:
                 to_load.append(chunk_paths[i])
                 num = stop - start + 1
                 running_tot += num
@@ -83,6 +88,7 @@ def train_model(
     num_to_load: int = 1024,
 ):
     all_dataset = TrainingDataset(revision, training_dir, num_to_load)
+    data_revision = all_dataset.revision
     train_n = int(len(all_dataset) * train_test_split) + 1
     test_n = len(all_dataset) - train_n
     train, test = random_split(all_dataset, [train_n, test_n])
@@ -127,9 +133,12 @@ def train_model(
             if batch_idx % 100 == 0:
                 last_loss = loss.item() / batch_size  # loss per batch
                 print(f"  batch {batch_idx}/{tot_batches} loss: {last_loss}")
+        scheduler.step()
+
+    torch.save(model.state_dict(), f"models/trained_model_{data_revision + 1}", )
 
 
 if __name__ == "__main__":
     net = Network()
 
-    train_model(net)
+    train_model(net, epochs=40)

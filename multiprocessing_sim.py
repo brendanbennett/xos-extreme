@@ -1,16 +1,17 @@
 from concurrent.futures import process
 from multiprocessing import Process, Queue
 from sim import XOAgentModel, Network, MCTS, save_training_data
+from torch import load
 
 N_PROCESSES = 4
 GAMES_PER_SAVE = 4
-AGENT_REVISION = 0
+AGENT_REVISION = 3
 
 def worker(save_queue: Queue, agent: XOAgentModel, games_per_save):
-    monte = MCTS()
     while True:
         list_training_data = []
         for i in range(games_per_save):
+            monte = MCTS()
             list_training_data.append(monte.self_play(agent, 200))
         save_queue.put(list_training_data)
 
@@ -20,7 +21,9 @@ def saver(save_queue: Queue):
         save_training_data(list_training_data, AGENT_REVISION)
 
 if __name__ == "__main__":
-    net = Network(2 + 1, 32, 4)
+    net = Network()
+    net.load_state_dict(load(f"models/trained_model_{AGENT_REVISION}"))
+    print("Loaded model weights")
     agent = XOAgentModel(net)
 
     save_queue = Queue()

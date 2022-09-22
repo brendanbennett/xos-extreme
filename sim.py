@@ -9,6 +9,7 @@ from pathlib import Path
 import pickle
 from agent import XOAgentBase, XOAgentModel, Network
 from re import compile, fullmatch
+from torch import load
 
 import pyximport
 pyximport.install(setup_args={"include_dirs": np.get_include()})
@@ -332,12 +333,13 @@ def save_training_data(
             pickle.dump(chunk, f)
 
 def evaluate_agents(agent1: XOAgentBase, agent2: XOAgentBase, games: int = 40, rollouts_per_move: int = 200):
-    MCTS_1 = MCTS()
-    MCTS_2 = MCTS()
+
 
     winners = {0: 0, 1: 0, 2: 0}
     # agent1 starts as player 1
     for game_num in range(games):
+        MCTS_1 = MCTS()
+        MCTS_2 = MCTS()
         game = XOGame()
         first_player_agent = 1
         for i in range(81):
@@ -383,7 +385,11 @@ def main():
     #         list_training_data.append(monte.self_play(agent, 200))
     #     save_training_data(list_training_data, 0)
 
-    evaluate_agents(XOAgentModel(Network()), XOAgentModel(Network()), games=4, rollouts_per_move=100)
+    trained_model = Network()
+    trained_model.load_state_dict(load("models/trained_model_4"))
+    trained_agent = XOAgentModel(trained_model)
+
+    evaluate_agents(XOAgentModel(Network()), trained_agent, games=10, rollouts_per_move=200)
     breakpoint()
 
 if __name__ == "__main__":
