@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 
+
 class Convolutional(nn.Module):
     def __init__(self, feature_planes: int, conv_filters: int) -> None:
         super().__init__()
@@ -41,12 +42,12 @@ class Residual(nn.Module):
 
 
 class PolicyHead(nn.Module):
-    def __init__(self, n_filters) -> None:
+    def __init__(self, n_filters, board_edge_len) -> None:
         super().__init__()
         self.conv = nn.Conv2d(n_filters, 2, 1, 1)
         self.bn = nn.BatchNorm2d(2)
 
-        self.linear = nn.Linear(2 * 9 * 9, 9 * 9)
+        self.linear = nn.Linear(2 * (board_edge_len**2), (board_edge_len**2))
 
     def forward(self, x):
         out = self.conv(x)
@@ -61,12 +62,12 @@ class PolicyHead(nn.Module):
 
 
 class ValueHead(nn.Module):
-    def __init__(self, n_filters, hidden) -> None:
+    def __init__(self, n_filters, hidden, board_edge_len) -> None:
         super().__init__()
         self.conv = nn.Conv2d(n_filters, 1, 1, 1)
         self.bn = nn.BatchNorm2d(1)
         # relu
-        self.linear1 = nn.Linear(9 * 9, hidden)
+        self.linear1 = nn.Linear((board_edge_len**2), hidden)
         # relu
         self.linear2 = nn.Linear(hidden, 1)
         # tanh
@@ -87,7 +88,11 @@ class ValueHead(nn.Module):
 
 class Network(nn.Module):
     def __init__(
-        self, feature_planes: int = 3, conv_filters: int = 32, n_residuals: int = 4
+        self,
+        feature_planes: int = 3,
+        conv_filters: int = 32,
+        n_residuals: int = 4,
+        board_edge_len: int = 9,
     ) -> None:
         super().__init__()
 
@@ -97,9 +102,9 @@ class Network(nn.Module):
             *[Residual(conv_filters) for _ in range(n_residuals)]
         )
 
-        self.policy_head = PolicyHead(conv_filters)
+        self.policy_head = PolicyHead(conv_filters, board_edge_len=board_edge_len)
 
-        self.value_head = ValueHead(conv_filters, conv_filters)
+        self.value_head = ValueHead(conv_filters, conv_filters, board_edge_len=board_edge_len)
 
     def forward(self, x):
         out = self.convolutional(x)
@@ -120,8 +125,13 @@ class XOAgentBase:
 
 
 class XOAgentModel(XOAgentBase):
-    def __init__(self, model: nn.Module) -> None:
-        self.model = model.float()
+    def __init__(self, model: nn.Module = None, feature_planes=3, board_edge_len=9) -> None:
+        self.feature_planes = feature_planes
+        self.board_edge_len = board_edge_len
+        if model is not None:
+            self.model = model.float()
+        else:
+            self.model = Network(feature_planes=feature_planes, board_edge_len=board_edge_len)
 
     def get_policy_and_value(self, features):
         self.model.eval()
@@ -129,12 +139,14 @@ class XOAgentModel(XOAgentBase):
         features_tensor = torch.from_numpy(np.array(features)[np.newaxis])
         features_tensor = features_tensor.to(torch.float32)
         model_out = self.model(features_tensor)
-        output_policy, output_value = torch.split(model_out, [81, 1], dim=1)
-        return output_policy.cpu().detach().numpy().reshape((9, 9)), output_value.item()
+        output_policy, output_value = torch.split(model_out, [self.board_edge_len**2, 1], dim=1)
+        return output_policy.cpu().detach().numpy().reshape((self.board_edge_len, self.board_edge_len)), output_value.item()
 
     @staticmethod
     def policy_and_value_to_model_out(policy, value):
-        return torch.from_numpy(np.concatenate((policy.flatten(), [value]))[np.newaxis]).to(torch.float32)
+        return torch.from_numpy(
+            np.concatenate((policy.flatten(), [value]))[np.newaxis]
+        ).to(torch.float32)
 
 
 class XOAgentRandom(XOAgentBase):

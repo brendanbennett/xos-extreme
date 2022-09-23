@@ -1,5 +1,6 @@
 from game.game import XOGame
-from game.utils import *
+# from game.utils import *
+from simple_xo.utils import *
 from copy import deepcopy
 import numpy as np
 import numpy.typing as npt
@@ -14,15 +15,17 @@ from torch import load
 
 
 import pyximport
+
+from simple_xo.game import SimpleXOGame
 pyximport.install(setup_args={"include_dirs": np.get_include()})
-from cython_modules.cython_test import UCT as C_UCT
-from cython_modules.cython_test import get_features
+# from cython_modules.cython_test import UCT as C_UCT
+# from cython_modules.cython_test import get_features
 
 TRAINING_DATA_RE = compile("training_data_\d+_\d+\.obj")
 
 
 class MCTS:
-    def __init__(self) -> None:
+    def __init__(self, game_class=XOGame) -> None:
         self.Q = defaultdict(float)
         self.N = defaultdict(int)
         self.W = defaultdict(float)
@@ -31,12 +34,13 @@ class MCTS:
             dict()
         )  # keys are features as bytes, values are list of moves
         self.exploration = 1
+        self.game_class = game_class
 
         self.timings = defaultdict(list)
 
     def _get_edges_from_parent(self, game_state) -> list:
         """Returns a list of edge keys originating from a game state"""
-        valid_moves_array, winner = XOGame.valid_moves_array_and_winner_from_state(
+        valid_moves_array, winner = self.game_class.valid_moves_array_and_winner_from_state(
             game_state
         )
         valid_moves = get_valid_moves_from_array(valid_moves_array)
@@ -49,7 +53,7 @@ class MCTS:
     def _uct_select(self, game_state):
         DEFAULT_PARENT_VISITS = 1e-8
 
-        valid_moves_array, winner = XOGame.valid_moves_array_and_winner_from_state(
+        valid_moves_array, winner = self.game_class.valid_moves_array_and_winner_from_state(
             game_state
         )
         valid_moves = get_valid_moves_from_array(valid_moves_array)
@@ -147,7 +151,7 @@ class MCTS:
         features = get_features(game_state)
         agent_policy, value = agent.get_policy_and_value(features)
 
-        valid_moves_array = XOGame.valid_moves_array_and_winner_from_state(game_state)[
+        valid_moves_array = self.game_class.valid_moves_array_and_winner_from_state(game_state)[
             0
         ]
         valid_moves = get_valid_moves_from_array(valid_moves_array)
@@ -170,7 +174,7 @@ class MCTS:
             reward = 1 - reward
 
     def probabilities_for_state(self, game_state, temp):
-        valid_moves_array, winner = XOGame.valid_moves_array_and_winner_from_state(
+        valid_moves_array, winner = self.game_class.valid_moves_array_and_winner_from_state(
             game_state
         )
         valid_moves = get_valid_moves_from_array(valid_moves_array)
@@ -221,7 +225,7 @@ class MCTS:
         self.trajectories.pop(node_key(features), None)
 
     def self_play(self, agent, rollouts_per_move=200):
-        game = XOGame()
+        game = self.game_class()
         training_states = []
         for j in range(81):
             # print(f"Move {j+1}")
@@ -303,7 +307,7 @@ def save_training_data(
         with open(Path(revision_path, name), "wb") as f:
             pickle.dump(chunk, f)
 
-def evaluate_agents(agent1: XOAgentBase, agent2: XOAgentBase, games: int = 40, rollouts_per_move: int = 200):
+def evaluate_agents(agent1: XOAgentBase, agent2: XOAgentBase, games: int = 40, rollouts_per_move: int = 200, game_class=XOGame):
 
 
     winners = {0: 0, 1: 0, 2: 0}
@@ -311,7 +315,7 @@ def evaluate_agents(agent1: XOAgentBase, agent2: XOAgentBase, games: int = 40, r
     for game_num in range(games):
         MCTS_1 = MCTS()
         MCTS_2 = MCTS()
-        game = XOGame()
+        game = game_class()
         first_player_agent = 1
         for i in range(81):
             current_agent_idx = (first_player_agent + i + 1) % 2 + 1
@@ -356,11 +360,15 @@ def main():
     #         list_training_data.append(monte.self_play(agent, 200))
     #     save_training_data(list_training_data, 0)
 
-    trained_model = Network()
-    trained_model.load_state_dict(load("models/trained_model_4"))
-    trained_agent = XOAgentModel(trained_model)
+    # trained_model = Network()
+    # trained_model.load_state_dict(load("models/trained_model_4"))
+    # trained_agent = XOAgentModel(trained_model)
 
-    evaluate_agents(XOAgentModel(Network()), trained_agent, games=10, rollouts_per_move=200)
+    # evaluate_agents(XOAgentModel(Network()), trained_agent, games=10, rollouts_per_move=200)
+    agent = XOAgentModel(feature_planes=2, board_edge_len=3)
+
+    monte = MCTS(SimpleXOGame)
+    data = monte.self_play(agent)
     breakpoint()
 
 if __name__ == "__main__":
