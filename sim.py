@@ -1,6 +1,7 @@
 from game.game import XOGame
-# from game.utils import *
-from simple_xo.utils import *
+from game.utils import *
+# from simple_xo.utils import *
+# from simple_xo.game import SimpleXOGame
 from copy import deepcopy
 import numpy as np
 import numpy.typing as npt
@@ -16,7 +17,7 @@ from torch import load
 
 import pyximport
 
-from simple_xo.game import SimpleXOGame
+
 pyximport.install(setup_args={"include_dirs": np.get_include()})
 # from cython_modules.cython_test import UCT as C_UCT
 # from cython_modules.cython_test import get_features
@@ -224,15 +225,17 @@ class MCTS:
 
         self.trajectories.pop(node_key(features), None)
 
-    def self_play(self, agent, rollouts_per_move=200):
+    def self_play(self, agent, rollouts_per_move=20, verbose=0):
         game = self.game_class()
         training_states = []
         for j in range(81):
             # print(f"Move {j+1}")
             game_state = game_state_from_game(game)
+            if verbose >= 1:
+                print(game.board)
             for i in range(rollouts_per_move):
-                # if i % 20 == 0:
-                #     print(f"{i/rollouts_per_move*100:.0f}%")
+                if verbose>=1 and i % (rollouts_per_move//5) == 0:
+                    print(f"{i/rollouts_per_move*100:.0f}%")
                 self.rollout(game_state, agent)
 
             probabilities = self.probabilities_for_state(game_state, 1)
@@ -263,8 +266,7 @@ class MCTS:
 
 
 def profiling():
-    net = Network(2 + 1, 32, 4)
-    agent = XOAgentModel(net)
+    agent = XOAgentModel(feature_planes=3, board_edge_len=9)
     game_state = game_state_from_game(XOGame())
 
     monte = MCTS()
@@ -365,10 +367,11 @@ def main():
     # trained_agent = XOAgentModel(trained_model)
 
     # evaluate_agents(XOAgentModel(Network()), trained_agent, games=10, rollouts_per_move=200)
-    agent = XOAgentModel(feature_planes=2, board_edge_len=3)
+    
+    agent = XOAgentModel(feature_planes=3, board_edge_len=9)
 
-    monte = MCTS(SimpleXOGame)
-    data = monte.self_play(agent)
+    monte = MCTS(XOGame)
+    data = monte.self_play(agent, rollouts_per_move=20)
     breakpoint()
 
 if __name__ == "__main__":

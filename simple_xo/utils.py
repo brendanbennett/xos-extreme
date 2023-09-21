@@ -6,7 +6,7 @@ from simple_xo.game import SimpleXOGame
 DEFAULT_PARENT_VISITS = 1e-8
 
 def features_for_board_and_player(board, player):
-    features = np.zeros((3, 3))
+    features = np.zeros_like(board)
     features[board == player] = 1
     return features
 

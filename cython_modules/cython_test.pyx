@@ -6,7 +6,7 @@ np.import_array()
 import random
 import cython
 
-DTYPE_int = np.int
+DTYPE_int = int
 
 ctypedef np.int_t DTYPE_int_t
 @cython.boundscheck(False) # turn off bounds-checking for entire function
