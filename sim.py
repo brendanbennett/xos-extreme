@@ -1,5 +1,6 @@
 from game.game import XOGame
 from game.utils import *
+
 # from simple_xo.utils import *
 # from simple_xo.game import SimpleXOGame
 from copy import deepcopy
@@ -13,6 +14,7 @@ import pickle
 from agent import XOAgentBase, XOAgentModel, Network
 from re import compile, fullmatch
 from torch import load
+from tqdm import tqdm
 
 
 import pyximport
@@ -22,11 +24,30 @@ pyximport.install(setup_args={"include_dirs": np.get_include()})
 # from cython_modules.cython_test import UCT as C_UCT
 # from cython_modules.cython_test import get_features
 
-TRAINING_DATA_RE = compile("training_data_\d+_\d+\.obj")
+TRAINING_DATA_RE = compile(r"training_data_\d+_\d+\.obj")
+
+
+def get_agent(revision: int | None = None, network: Network | None = None):
+    if network is None:
+        network = Network()
+
+    if revision is None:
+        revision = max(
+            [
+                int(path.stem.split("_")[-1])
+                for path in Path("models").iterdir()
+                if path.is_file() and fullmatch(r"trained_model_\d+", path.stem)
+            ]
+        )
+    model_path = Path("models", f"trained_model_{revision}")
+    network.load_state_dict(load(model_path))
+    print(f"Loaded model weights from {model_path}")
+    agent = XOAgentModel(network)
+    return agent, revision
 
 
 class MCTS:
-    def __init__(self, game_class=XOGame) -> None:
+    def __init__(self, game_class=XOGame, verbose=0) -> None:
         self.Q = defaultdict(float)
         self.N = defaultdict(int)
         self.W = defaultdict(float)
@@ -38,14 +59,18 @@ class MCTS:
         self.game_class = game_class
 
         self.timings = defaultdict(list)
+        self.verbose = verbose
 
     def _get_edges_from_parent(self, game_state) -> list:
         """Returns a list of edge keys originating from a game state"""
-        valid_moves_array, winner = self.game_class.valid_moves_array_and_winner_from_state(
-            game_state
+        valid_moves_array, winner = (
+            self.game_class.valid_moves_array_and_winner_from_state(game_state)
         )
         valid_moves = get_valid_moves_from_array(valid_moves_array)
-        return [edge_key(get_features(game_state), valid_move) for valid_move in valid_moves]
+        return [
+            edge_key(get_features(game_state), valid_move)
+            for valid_move in valid_moves
+        ]
 
     def _total_parent_N(self, game_state) -> list:
         edges = self._get_edges_from_parent(game_state)
@@ -54,13 +79,16 @@ class MCTS:
     def _uct_select(self, game_state):
         DEFAULT_PARENT_VISITS = 1e-8
 
-        valid_moves_array, winner = self.game_class.valid_moves_array_and_winner_from_state(
-            game_state
+        valid_moves_array, winner = (
+            self.game_class.valid_moves_array_and_winner_from_state(game_state)
         )
         valid_moves = get_valid_moves_from_array(valid_moves_array)
 
         # start = time.perf_counter()
-        assert all(edge_key(get_features(game_state), move) in self.P for move in valid_moves)
+        assert all(
+            edge_key(get_features(game_state), move) in self.P
+            for move in valid_moves
+        )
         # end = time.perf_counter()
         # self.timings["assert"].append(end - start)
 
@@ -74,7 +102,9 @@ class MCTS:
                 * (
                     math.sqrt(
                         sum(
-                            self.N[edge_key(get_features(game_state), valid_move)]
+                            self.N[
+                                edge_key(get_features(game_state), valid_move)
+                            ]
                             for valid_move in valid_moves
                         )
                         + DEFAULT_PARENT_VISITS
@@ -100,6 +130,12 @@ class MCTS:
         # print(list(map(lambda m : round(UCT(m), 2), valid_moves)))
         # print("\n")
         # selected = max(valid_moves, key=lambda m : C_UCT(m, self.exploration, game_state, valid_moves, self.N, self.Q))
+        if self.verbose >= 3:
+            UCTs = np.zeros(valid_moves_array.shape)
+            for move in valid_moves:
+                UCTs[move[0], move[1]] = UCT(move)
+            print("UCTs")
+            print(UCTs)
         selected = max(valid_moves, key=UCT_import)
         # end = time.perf_counter()
         # self.timings["max"].append(end - start)
@@ -152,12 +188,16 @@ class MCTS:
         features = get_features(game_state)
         agent_policy, value = agent.get_policy_and_value(features)
 
-        valid_moves_array = self.game_class.valid_moves_array_and_winner_from_state(game_state)[
-            0
-        ]
+        valid_moves_array = (
+            self.game_class.valid_moves_array_and_winner_from_state(game_state)[
+                0
+            ]
+        )
         valid_moves = get_valid_moves_from_array(valid_moves_array)
         if len(valid_moves) != 0:
-            probabilities = get_probabilities_array(agent_policy, valid_moves_array)
+            probabilities = get_probabilities_array(
+                agent_policy, valid_moves_array
+            )
             for move in valid_moves:
                 # print(f"Adding move {move} to trajectories")
                 edge = edge_key(features, move)
@@ -175,8 +215,8 @@ class MCTS:
             reward = 1 - reward
 
     def probabilities_for_state(self, game_state, temp):
-        valid_moves_array, winner = self.game_class.valid_moves_array_and_winner_from_state(
-            game_state
+        valid_moves_array, winner = (
+            self.game_class.valid_moves_array_and_winner_from_state(game_state)
         )
         valid_moves = get_valid_moves_from_array(valid_moves_array)
 
@@ -188,10 +228,13 @@ class MCTS:
         # Also this shouldn't be called without running any searches
         assert root_visits > 0
         valid_moves_probabilities = [
-            self.N[edge_key(get_features(game_state), move)] / root_visits for move in valid_moves
+            self.N[edge_key(get_features(game_state), move)] / root_visits
+            for move in valid_moves
         ]
         probabilities_array = np.zeros((9, 9))
-        probabilities_array[tuple(np.fliplr(valid_moves).T)] = valid_moves_probabilities
+        probabilities_array[tuple(np.fliplr(valid_moves).T)] = (
+            valid_moves_probabilities
+        )
         probabilities_array = np.power(probabilities_array, 1 / temp)
         probabilities_array = probabilities_array / np.sum(probabilities_array)
         return probabilities_array
@@ -225,20 +268,23 @@ class MCTS:
 
         self.trajectories.pop(node_key(features), None)
 
-    def self_play(self, agent, rollouts_per_move=20, verbose=0):
+    def self_play(self, agent, rollouts_per_move=20):
         game = self.game_class()
         training_states = []
-        for j in range(81):
+        for j in tqdm(range(81)):
             # print(f"Move {j+1}")
             game_state = game_state_from_game(game)
-            if verbose >= 1:
+            if self.verbose >= 1:
                 print(game.board)
             for i in range(rollouts_per_move):
-                if verbose>=1 and i % (rollouts_per_move//5) == 0:
+                if self.verbose >= 1 and i % (rollouts_per_move // 5) == 0:
                     print(f"{i/rollouts_per_move*100:.0f}%")
                 self.rollout(game_state, agent)
 
             probabilities = self.probabilities_for_state(game_state, 1)
+            if self.verbose >= 2:
+                print("Probabilities")
+                print(probabilities)
             chosen_move = np.flip(
                 np.unravel_index(np.argmax(probabilities), shape=(9, 9))
             )
@@ -281,13 +327,17 @@ def save_training_data(
     chunk_size=32,
     training_dir="training_data",
 ):
-    revisions_paths = [x for x in Path(".", training_dir).iterdir() if x.is_dir()]
+    revisions_paths = [
+        x for x in Path(".", training_dir).iterdir() if x.is_dir()
+    ]
     revision_path = Path(".", training_dir, str(agent_revision))
     if revision_path not in revisions_paths:
         revision_path.mkdir()
 
     chunk_paths = [
-        x for x in revision_path.iterdir() if x.is_file() and fullmatch(TRAINING_DATA_RE, x.name)
+        x
+        for x in revision_path.iterdir()
+        if x.is_file() and fullmatch(TRAINING_DATA_RE, x.name)
     ]
     chunk_idxs = [
         (int(path.stem.split("_")[-2]), int(path.stem.split("_")[-1]))
@@ -295,12 +345,16 @@ def save_training_data(
     ]
 
     new_chunk_start_offset = (
-        0 if len(chunk_idxs) == 0 else sorted(chunk_idxs, key=lambda i: i[1])[-1][1] + 1
+        0
+        if len(chunk_idxs) == 0
+        else sorted(chunk_idxs, key=lambda i: i[1])[-1][1] + 1
     )
 
     for chunk_start in range(0, len(list_of_self_play_games), chunk_size):
         try:
-            chunk = list_of_self_play_games[chunk_start : chunk_start + chunk_size]
+            chunk = list_of_self_play_games[
+                chunk_start : chunk_start + chunk_size
+            ]
         except KeyError:
             chunk = list_of_self_play_games[chunk_start:]
         name = f"training_data_{new_chunk_start_offset + chunk_start}_{new_chunk_start_offset + chunk_start + len(chunk) - 1}.obj"
@@ -309,8 +363,14 @@ def save_training_data(
         with open(Path(revision_path, name), "wb") as f:
             pickle.dump(chunk, f)
 
-def evaluate_agents(agent1: XOAgentBase, agent2: XOAgentBase, games: int = 40, rollouts_per_move: int = 200, game_class=XOGame):
 
+def evaluate_agents(
+    agent1: XOAgentBase,
+    agent2: XOAgentBase,
+    games: int = 40,
+    rollouts_per_move: int = 200,
+    game_class=XOGame,
+):
 
     winners = {0: 0, 1: 0, 2: 0}
     # agent1 starts as player 1
@@ -337,11 +397,13 @@ def evaluate_agents(agent1: XOAgentBase, agent2: XOAgentBase, games: int = 40, r
 
             if game.winner is not None:
                 winning_agent_idx = (first_player_agent + game.winner) % 2 + 1
-                winning_agent_idx = 0 if game.winner == 0 else int(winning_agent_idx)
+                winning_agent_idx = (
+                    0 if game.winner == 0 else int(winning_agent_idx)
+                )
                 print(f"Agent {winning_agent_idx} wins game {game_num + 1}")
                 winners[winning_agent_idx] += 1
                 break
-            
+
             current_MCTS.select_new_parent(game_state, chosen_move)
             opponent_MCTS.select_new_parent(game_state, chosen_move)
         first_player_agent = 2 - first_player_agent
@@ -355,24 +417,26 @@ def main():
     # agent = XOAgentModel(net)
 
     # monte = MCTS()
-    
+
     # while True:
     #     list_training_data = []
     #     for i in range(8):
     #         list_training_data.append(monte.self_play(agent, 200))
     #     save_training_data(list_training_data, 0)
-
-    # trained_model = Network()
-    # trained_model.load_state_dict(load("models/trained_model_4"))
-    # trained_agent = XOAgentModel(trained_model)
+    net = Network(hidden=128)
+    agent, revision = get_agent(network=net)
 
     # evaluate_agents(XOAgentModel(Network()), trained_agent, games=10, rollouts_per_move=200)
-    
-    agent = XOAgentModel(feature_planes=3, board_edge_len=9)
+    np.set_printoptions(precision=2)
 
-    monte = MCTS(XOGame)
-    data = monte.self_play(agent, rollouts_per_move=20)
-    breakpoint()
+    monte = MCTS(XOGame, verbose=0)
+    while True:
+        games_list = []
+        for i in range(4):
+            games_list.append(monte.self_play(agent, rollouts_per_move=200))
+
+        save_training_data(games_list, revision)
+
 
 if __name__ == "__main__":
     main()
