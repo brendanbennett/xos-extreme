@@ -12,6 +12,27 @@ from agent import Network, XOAgentModel
 from sim import TRAINING_DATA_RE
 
 
+def get_device(device: str | torch.device | None) -> torch.device:
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    elif isinstance(device, torch.device):
+        device = device
+    else:
+        device = torch.device(device)
+    return device
+
+class CustomLoss(torch.nn.Module):
+    def __init__(self, alpha: float = 0.02):
+        super().__init__()
+        self.alpha = alpha
+        self.cross_entropy = torch.nn.CrossEntropyLoss()
+    
+    def forward(self, predicions, target):
+        policy_loss = self.cross_entropy(predicions[:, :-1], target[:, :-1])
+        value_loss = torch.mean((predicions[:, -1] - target[:, -1])**2)
+        return policy_loss * value_loss
+
+
 class TrainingDataset(Dataset):
     def __init__(
         self,
@@ -48,6 +69,7 @@ class TrainingDataset(Dataset):
         chunk_paths.reverse()
         chunk_idxs.reverse()
 
+
         to_load: list[Path] = []
         running_tot = 0
         for i, (start, stop) in enumerate(chunk_idxs):
@@ -55,6 +77,9 @@ class TrainingDataset(Dataset):
                 to_load.append(chunk_paths[i])
                 num = stop - start + 1
                 running_tot += num
+            else:
+                break
+        print(f"Loading {len(to_load)} chunks")
 
         training_data = dict(features=list(), Y=list())
         for path in to_load:
@@ -86,7 +111,10 @@ def train_model(
     train_test_split: float = 0.8,
     training_dir="training_data",
     num_to_load: int = 1024,
+    device: str | torch.device | None = None,
 ):
+    device = get_device(device)
+    
     all_dataset = TrainingDataset(revision, training_dir, num_to_load)
     data_revision = all_dataset.revision
     train_n = int(len(all_dataset) * train_test_split) + 1
@@ -98,11 +126,13 @@ def train_model(
 
     model.train()
 
-    loss_fn = torch.nn.MSELoss()
-    optimizer = torch.optim.SGD(model.parameters(), lr=1e-2, momentum=0.9)
+    loss_fn = CustomLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
     scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[5,10,20], gamma=0.1)
+    scheduler.verbose = True
 
     for epoch in range(epochs):
+        print(f"Epoch {epoch + 1}/{epochs}")
         last_loss = 0.0
 
         # Here, we use enumerate(training_loader) instead of
@@ -114,13 +144,13 @@ def train_model(
             features, labels = data
 
             # Labels should be shape (32, 82) not (32, 1, 82)
-            labels = torch.squeeze(labels, dim=1)
+            labels = torch.squeeze(labels, dim=1).to(device)
 
             # Zero your gradients for every batch!
             optimizer.zero_grad()
 
             # Make predictions for this batch
-            outputs = model(features.to(torch.float32))
+            outputs = model(features.to(torch.float32).to(device))
 
             # Compute the loss and its gradients
             loss = loss_fn(outputs, labels)
@@ -132,13 +162,15 @@ def train_model(
             # Gather data and report
             if batch_idx % 100 == 0:
                 last_loss = loss.item() / batch_size  # loss per batch
-                print(f"  batch {batch_idx}/{tot_batches} loss: {last_loss}")
+                print(f"  batch {batch_idx}/{tot_batches} loss: {last_loss:.4e}")
+
         scheduler.step()
 
     torch.save(model.state_dict(), f"models/trained_model_{data_revision + 1}", )
 
 
 if __name__ == "__main__":
-    net = Network()
+    
+    net = Network(hidden=128)
 
-    train_model(net, epochs=40)
+    train_model(net, epochs=60, num_to_load=10000, device="cpu")
