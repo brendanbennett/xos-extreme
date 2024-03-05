@@ -9,6 +9,7 @@ import pyximport
 pyximport.install(setup_args={"include_dirs": np.get_include()})
 from cython_modules.cython_test import check_win_from_scratch as C_check_win_from_scratch
 
+
 class XOGame:
     def __init__(self, game_state=None) -> None:
         if game_state is None:
@@ -146,8 +147,24 @@ class XOGame:
         self._update_valid_moves_array()
         self._iterate_players()
 
-    def display_board(self) -> None:
-        print(self.board)
+    def show_on_board(self, obj) -> str:
+        """Returns pretty printable string of object on the board"""
+        assert obj.shape == self.board.shape
+        display_board = obj.astype(str)
+        display_board = np.insert(display_board, [3, 6], "|", axis=1)
+        display_board = np.insert(display_board, [3, 6], "-", axis=0)
+        display_board = [" ".join(list(row)) for row in display_board]
+        display_board = "\n".join(display_board)
+        return display_board
+        
+    def __repr__(self) -> str:
+        display_board = np.full_like(self.board, " ", dtype=str)
+        display_board[self.board == 1] = "o"
+        display_board[self.board == 2] = "x"
+        if self._last_move is not None:
+            display_board[self._last_move[1], self._last_move[0]] = display_board[self._last_move[1], self._last_move[0]].upper()
+        display_board = self.show_on_board(display_board)
+        return f"XOGame(\n{display_board}\n)"
 
     @staticmethod
     def check_win_from_scratch_old(board: npt.NDArray, players=[1, 2]) -> int:
