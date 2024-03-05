@@ -21,15 +21,15 @@ def get_device(device: str | torch.device | None) -> torch.device:
         device = torch.device(device)
     return device
 
+
 class CustomLoss(torch.nn.Module):
     def __init__(self, alpha: float = 0.02):
         super().__init__()
-        self.alpha = alpha
         self.cross_entropy = torch.nn.CrossEntropyLoss()
-    
+
     def forward(self, predicions, target):
         policy_loss = self.cross_entropy(predicions[:, :-1], target[:, :-1])
-        value_loss = torch.mean((predicions[:, -1] - target[:, -1])**2)
+        value_loss = torch.mean((predicions[:, -1] - target[:, -1]) ** 2)
         return policy_loss * value_loss
 
 
@@ -44,9 +44,11 @@ class TrainingDataset(Dataset):
         self.num_to_load = num_to_load
         self.revision = self.get_revision(revision)
         self.training_data = self.load_training_data()
-        
+
     def get_revision(self, revision: int | None = None) -> int:
-        revisions_paths = [x for x in Path(".", self.training_dir).iterdir() if x.is_dir()]
+        revisions_paths = [
+            x for x in Path(".", self.training_dir).iterdir() if x.is_dir()
+        ]
         if revision is None:
             revision = max([int(path.stem) for path in revisions_paths])
             print(f"Using latest revision: {revision}")
@@ -54,13 +56,17 @@ class TrainingDataset(Dataset):
         return revision
 
     def load_training_data(self) -> dict:
-        revisions_paths = [x for x in Path(".", self.training_dir).iterdir() if x.is_dir()]
+        revisions_paths = [
+            x for x in Path(".", self.training_dir).iterdir() if x.is_dir()
+        ]
         revision_path = Path(".", self.training_dir, str(self.revision))
         if revision_path not in revisions_paths:
             raise IOError(f"No saved data for revision {self.revision}")
 
         chunk_paths = [
-            x for x in revision_path.iterdir() if x.is_file() and fullmatch(TRAINING_DATA_RE, x.name)
+            x
+            for x in revision_path.iterdir()
+            if x.is_file() and fullmatch(TRAINING_DATA_RE, x.name)
         ]
         chunk_idxs = [
             (int(path.stem.split("_")[-2]), int(path.stem.split("_")[-1]))
@@ -68,7 +74,6 @@ class TrainingDataset(Dataset):
         ]
         chunk_paths.reverse()
         chunk_idxs.reverse()
-
 
         to_load: list[Path] = []
         running_tot = 0
@@ -88,7 +93,9 @@ class TrainingDataset(Dataset):
                 raw = list(chain(*chain(raw)))
                 features, policies, values = zip(*raw)
                 Y = [
-                    XOAgentModel.policy_and_value_to_model_out(policies[i], values[i])
+                    XOAgentModel.policy_and_value_to_model_out(
+                        policies[i], values[i]
+                    )
                     for i in range(len(raw))
                 ]
                 training_data["features"].extend(features)
@@ -100,7 +107,10 @@ class TrainingDataset(Dataset):
         return len(self.training_data["features"])
 
     def __getitem__(self, index):
-        return (self.training_data["features"][index], self.training_data["Y"][index])
+        return (
+            self.training_data["features"][index],
+            self.training_data["Y"][index],
+        )
 
 
 def train_model(
@@ -114,7 +124,7 @@ def train_model(
     device: str | torch.device | None = None,
 ):
     device = get_device(device)
-    
+
     all_dataset = TrainingDataset(revision, training_dir, num_to_load)
     data_revision = all_dataset.revision
     train_n = int(len(all_dataset) * train_test_split) + 1
@@ -128,7 +138,9 @@ def train_model(
 
     loss_fn = CustomLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
-    scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[5,10,20], gamma=0.1)
+    scheduler = torch.optim.lr_scheduler.MultiStepLR(
+        optimizer, milestones=[500, 1000], gamma=0.5
+    )
     scheduler.verbose = True
 
     for epoch in range(epochs):
@@ -162,15 +174,23 @@ def train_model(
             # Gather data and report
             if batch_idx % 100 == 0:
                 last_loss = loss.item() / batch_size  # loss per batch
-                print(f"  batch {batch_idx}/{tot_batches} loss: {last_loss:.4e}")
+                print(
+                    f"  batch {batch_idx}/{tot_batches} loss: {last_loss:.4e}"
+                )
+
+            if epoch == 4500:
+                breakpoint()
 
         scheduler.step()
 
-    torch.save(model.state_dict(), f"models/trained_model_{data_revision + 1}", )
+    torch.save(
+        model.state_dict(),
+        f"models/trained_model_{data_revision + 1}",
+    )
 
 
 if __name__ == "__main__":
-    
-    net = Network(hidden=128)
 
-    train_model(net, epochs=60, num_to_load=10000, device="cpu")
+    net = Network(hidden=64, conv_filters=36)
+
+    train_model(net, epochs=5000, num_to_load=10000, device="cpu", revision=2)

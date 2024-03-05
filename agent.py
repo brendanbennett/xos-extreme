@@ -5,16 +5,16 @@ import torchsummary
 
 
 class Convolutional(nn.Module):
-    def __init__(self, feature_planes: int, conv_filters: int = 32) -> None:
+    def __init__(self, feature_planes: int, conv_filters: int) -> None:
         super().__init__()
 
         self.conv1 = nn.Conv2d(
-            feature_planes, 2*conv_filters, 3, stride=1, padding=1
+            feature_planes, conv_filters, 3, stride=3, padding=0, groups=feature_planes
         )
-        self.batch_norm1 = nn.BatchNorm2d(2*conv_filters)
+        self.batch_norm1 = nn.BatchNorm2d(conv_filters)
 
         self.conv2 = nn.Conv2d(
-            2*conv_filters, conv_filters, 3, stride=3, padding=0
+            conv_filters, conv_filters, 3, stride=1, padding=1
         )
         self.batch_norm2 = nn.BatchNorm2d(conv_filters)
         
@@ -81,7 +81,7 @@ class Network(nn.Module):
     def __init__(
         self,
         feature_planes: int = 3,
-        conv_filters: int = 32,
+        conv_filters: int = 36,
         hidden: int = 64,
         board_edge_len: int = 9,
     ) -> None:

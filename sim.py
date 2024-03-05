@@ -93,6 +93,7 @@ class MCTS:
         # self.timings["assert"].append(end - start)
 
         # Modified from alphago zero paper to add a small number to uct so it's never zero.
+        # TODO Vectorize this whole function over valid_moves
         def UCT(move):
             edge = edge_key(get_features(game_state), move)
             assert edge in self.Q
@@ -152,10 +153,7 @@ class MCTS:
             self.trajectories[node_key] = [move]
 
     def _get_trajectories(self, game_state):
-        try:
-            return self.trajectories[node_key(get_features(game_state))]
-        except KeyError:
-            return []
+        return self.trajectories.get(node_key(get_features(game_state)), None)
 
     def _select(self, game_state):
         visited_edges = []
@@ -268,14 +266,15 @@ class MCTS:
 
         self.trajectories.pop(node_key(features), None)
 
-    def self_play(self, agent, rollouts_per_move=20):
-        game = self.game_class()
+    def self_play(self, agent, rollouts_per_move=20, game=None):
+        if game is None:
+            game = self.game_class()
         training_states = []
         for j in tqdm(range(81)):
             # print(f"Move {j+1}")
             game_state = game_state_from_game(game)
             if self.verbose >= 1:
-                print(game.board)
+                print(game)
             for i in range(rollouts_per_move):
                 if self.verbose >= 1 and i % (rollouts_per_move // 5) == 0:
                     print(f"{i/rollouts_per_move*100:.0f}%")
@@ -284,7 +283,7 @@ class MCTS:
             probabilities = self.probabilities_for_state(game_state, 1)
             if self.verbose >= 2:
                 print("Probabilities")
-                print(probabilities)
+                print(game.show_on_board(probabilities.astype('|S4')))
             chosen_move = np.flip(
                 np.unravel_index(np.argmax(probabilities), shape=(9, 9))
             )
@@ -408,6 +407,7 @@ def evaluate_agents(
             opponent_MCTS.select_new_parent(game_state, chosen_move)
         first_player_agent = 2 - first_player_agent
     return winners
+
 
 
 def main():
