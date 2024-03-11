@@ -107,6 +107,21 @@ class Network(nn.Module):
         output = torch.cat((policy_out, value_out), dim=1)
 
         return output
+    
+    
+class MLP(nn.Module):
+    def __init__(self, input_size, hidden_size, output_size) -> None:
+        super().__init__()
+        self.linear1 = nn.Linear(input_size, hidden_size)
+        self.linear2 = nn.Linear(hidden_size, hidden_size)
+        self.linear3 = nn.Linear(hidden_size, output_size)
+
+    def forward(self, x: torch.Tensor):
+        x = torch.relu(self.linear1(x.view(x.size(0), -1)))
+        x = torch.relu(self.linear2(x))
+        x = self.linear3(x)
+        x = torch.cat((torch.softmax(x[:, :-1], dim=1), torch.tanh(x[:, -1:])), dim=1)
+        return x
 
 
 class XOAgentBase:
@@ -157,7 +172,7 @@ class XOAgentRandom(XOAgentBase):
 
     def get_policy_and_value(self, features) -> tuple:
         return torch.from_numpy(self.rng.rand(9, 9)), None
-
+    
 
 if __name__ == "__main__":
     print(torch.cuda.is_available())
