@@ -1,14 +1,13 @@
 from itertools import chain
 from pathlib import Path
 import pickle
-from random import shuffle
 from re import fullmatch
-from sched import scheduler
 
 from torch.utils.data import Dataset, DataLoader, random_split
 import torch
+import torchsummary
 
-from agent import Network, XOAgentModel
+from agent import Network, XOAgentModel, MLP
 from sim import TRAINING_DATA_RE
 
 
@@ -39,10 +38,13 @@ class TrainingDataset(Dataset):
         revision: int | None = None,
         training_dir="training_data",
         num_to_load: int = 1024,
+        device="cpu",
     ) -> None:
         self.training_dir = training_dir
         self.num_to_load = num_to_load
         self.revision = self.get_revision(revision)
+        self.device = device
+
         self.training_data = self.load_training_data()
 
     def get_revision(self, revision: int | None = None) -> int:
@@ -95,9 +97,13 @@ class TrainingDataset(Dataset):
                 Y = [
                     XOAgentModel.policy_and_value_to_model_out(
                         policies[i], values[i]
-                    )
+                    ).to(device=self.device)
                     for i in range(len(raw))
                 ]
+                features = [
+                    torch.tensor(f).to(device=self.device) for f in features
+                ]
+
                 training_data["features"].extend(features)
                 training_data["Y"].extend(Y)
 
@@ -125,26 +131,32 @@ def train_model(
 ):
     device = get_device(device)
 
-    all_dataset = TrainingDataset(revision, training_dir, num_to_load)
+    all_dataset = TrainingDataset(
+        revision, training_dir, num_to_load, device=device
+    )
     data_revision = all_dataset.revision
     train_n = int(len(all_dataset) * train_test_split) + 1
     test_n = len(all_dataset) - train_n
     train, test = random_split(all_dataset, [train_n, test_n])
     train_dataloader, test_dataloader = DataLoader(
-        train, batch_size=batch_size, shuffle=True
+        train,
+        batch_size=batch_size,
+        shuffle=True,
     ), DataLoader(test, batch_size=batch_size, shuffle=True)
 
     model.train()
+    model.to(device)
 
     loss_fn = CustomLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
     scheduler = torch.optim.lr_scheduler.MultiStepLR(
-        optimizer, milestones=[500, 1000], gamma=0.5
+        optimizer, milestones=[int(epochs / 10), int(epochs / 4)], gamma=0.5
     )
-    scheduler.verbose = True
 
     for epoch in range(epochs):
-        print(f"Epoch {epoch + 1}/{epochs}")
+        print(
+            f"Epoch {epoch + 1}/{epochs}, learning rate: {scheduler.get_last_lr()}"
+        )
         last_loss = 0.0
 
         # Here, we use enumerate(training_loader) instead of
@@ -156,13 +168,13 @@ def train_model(
             features, labels = data
 
             # Labels should be shape (32, 82) not (32, 1, 82)
-            labels = torch.squeeze(labels, dim=1).to(device)
+            labels = torch.squeeze(labels, dim=1)
 
             # Zero your gradients for every batch!
             optimizer.zero_grad()
 
             # Make predictions for this batch
-            outputs = model(features.to(torch.float32).to(device))
+            outputs = model(features.to(torch.float32))
 
             # Compute the loss and its gradients
             loss = loss_fn(outputs, labels)
@@ -178,7 +190,7 @@ def train_model(
                     f"  batch {batch_idx}/{tot_batches} loss: {last_loss:.4e}"
                 )
 
-            if epoch == 4500:
+            if epoch == epochs - 1 and batch_idx == 0:
                 breakpoint()
 
         scheduler.step()
@@ -191,6 +203,7 @@ def train_model(
 
 if __name__ == "__main__":
 
-    net = Network(hidden=64, conv_filters=36)
+    # net = Network(hidden=64, conv_filters=36)
+    net = MLP(9 * 9 * 3, 64, 82)
 
-    train_model(net, epochs=5000, num_to_load=10000, device="cpu", revision=2)
+    train_model(net, epochs=1000, num_to_load=10000, device="cuda", revision=2)
