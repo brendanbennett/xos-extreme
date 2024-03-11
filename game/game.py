@@ -9,18 +9,35 @@ import pyximport
 pyximport.install(setup_args={"include_dirs": np.get_include()})
 from cython_modules.cython_test import check_win_from_scratch as C_check_win_from_scratch
 
+def _generate_all_boards():
+    all_boards_strs = [f"{np.base_repr(i, 3):0>9}" for i in range(3**9)]
+    all_boards = [np.array([int(i) for i in list(k)], dtype=np.int8).reshape(3, 3) for k in all_boards_strs]
+    return all_boards
+
+def _index_from_board(board):
+    return int("".join([str(int(i)) for i in board.flatten()]), 3)
+
+def _get_winners(boards):
+    winners = [C_check_win_from_scratch(board) for board in boards]
+    winners = [k if k != -1 else 0 for k in winners]
+    return winners
+
+winners = _get_winners(_generate_all_boards())
+
+def check_win_lookup(board):
+    return winners[_index_from_board(board)]
 
 class XOGame:
     def __init__(self, game_state=None) -> None:
         if game_state is None:
-            self.board = np.zeros((9, 9))
+            self.board = np.zeros((9, 9), dtype=np.int8)
             # players 1 and 2. 1 goes first
             self.player: int = 1
             self.winner: int = None
 
-            self._large_board = np.zeros((3, 3))
+            self._large_board = np.zeros((3, 3), dtype=np.int8)
             self._last_move: tuple[int, int] = None
-            self._valid_moves_array = np.full((9, 9), True)
+            self._valid_moves_array = np.full((9, 9), True, dtype=bool)
         else:
             self._init_from_game_state(game_state)
 
@@ -76,7 +93,7 @@ class XOGame:
         """Return valid moves as one hot boolean np array"""
         large_coords = self._get_large_coords_for_next(self._last_move)
         if large_coords is not None and self._get_large_board(large_coords) == 0:
-            send_to = np.zeros((3, 3))
+            send_to = np.zeros((3, 3), dtype=np.int8)
             send_to[large_coords[1], large_coords[0]] = 1
             mask = np.repeat(np.repeat(send_to, 3, 0), 3, 1)
             masked = np.logical_and(self.board == 0, mask)
@@ -190,14 +207,14 @@ class XOGame:
     @staticmethod
     def check_win_from_scratch(board):
         # w = XOGame.check_win_from_scratch_old(board)
-        wc = C_check_win_from_scratch(board)
-        wc = wc if wc != -1 else None
+        wc = check_win_lookup(board)
+        wc = None if wc == 0 else wc
         # assert w == wc
         return wc
 
     @staticmethod
     def generate_large_board_from_board(board):
-        large_board = np.zeros((3, 3))
+        large_board = np.zeros((3, 3), dtype=np.int8)
 
         for x in range(3):
             for y in range(3):
@@ -205,7 +222,28 @@ class XOGame:
                 win = XOGame.check_win_from_scratch(small_board)
                 large_board[y, x] = 0 if win is None else win
         return large_board
+    
+    @staticmethod
+    def valid_moves_array_from_state(game_state):
+        board, player, last_move = game_state
+        large_board = XOGame.generate_large_board_from_board(board)
 
+        large_coords = XOGame._get_large_coords_for_next(last_move)
+        if (
+            large_coords is not None
+            and large_board[large_coords[1], large_coords[0]] == 0
+        ):
+            send_to = np.zeros((3, 3))
+            send_to[large_coords[1], large_coords[0]] = 1
+            mask = np.repeat(np.repeat(send_to, 3, 0), 3, 1)
+            masked = np.logical_and(board == 0, mask)
+            valid_moves = masked
+        else:
+            mask = np.repeat(np.repeat(large_board, 3, 0), 3, 1)
+            valid_moves = 0 == board + mask
+
+        return valid_moves
+    
     @staticmethod
     def valid_moves_array_and_winner_from_state(game_state):
         board, player, last_move = game_state

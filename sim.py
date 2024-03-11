@@ -7,7 +7,6 @@ from copy import deepcopy
 import numpy as np
 import numpy.typing as npt
 from collections import defaultdict
-import math
 import time
 from pathlib import Path
 import pickle
@@ -15,7 +14,6 @@ from agent import XOAgentBase, XOAgentModel, Network
 from re import compile, fullmatch
 from torch import load
 from tqdm import tqdm
-
 
 import pyximport
 
@@ -27,7 +25,7 @@ pyximport.install(setup_args={"include_dirs": np.get_include()})
 TRAINING_DATA_RE = compile(r"training_data_\d+_\d+\.obj")
 
 
-def get_agent(revision: int | None = None, network: Network | None = None):
+def get_agent(revision: int | None = None, network: Network | None = None, load_weights: bool = True) -> tuple[XOAgentBase, int]:
     if network is None:
         network = Network()
 
@@ -37,11 +35,12 @@ def get_agent(revision: int | None = None, network: Network | None = None):
                 int(path.stem.split("_")[-1])
                 for path in Path("models").iterdir()
                 if path.is_file() and fullmatch(r"trained_model_\d+", path.stem)
-            ]
+            ], default=0
         )
-    model_path = Path("models", f"trained_model_{revision}")
-    network.load_state_dict(load(model_path))
-    print(f"Loaded model weights from {model_path}")
+    if load_weights:
+        model_path = Path("models", f"trained_model_{revision}")
+        network.load_state_dict(load(model_path))
+        print(f"Loaded model weights from {model_path}")
     agent = XOAgentModel(network)
     return agent, revision
 
@@ -75,71 +74,22 @@ class MCTS:
     def _total_parent_N(self, game_state) -> list:
         edges = self._get_edges_from_parent(game_state)
         return [self.N[edge] for edge in edges]
+    
+    def _UCT_vectorized(self, valid_moves, features, default_parent_visits=1e-8):
+            """Return UCT maximal move for all valid moves"""
+            edges = [edge_key(features, move) for move in valid_moves]
+            N_vals = np.array([self.N[edge] for edge in edges])
+            Q_vals = np.array([self.Q[edge] for edge in edges])
+            uct = self.exploration * (np.sqrt(np.sum(N_vals) + default_parent_visits) / (1 + N_vals)) + Q_vals
+            return valid_moves[np.argmax(uct)]
 
-    def _uct_select(self, game_state):
-        DEFAULT_PARENT_VISITS = 1e-8
-
+    def _uct_select(self, game_state, features):
         valid_moves_array, winner = (
             self.game_class.valid_moves_array_and_winner_from_state(game_state)
         )
         valid_moves = get_valid_moves_from_array(valid_moves_array)
 
-        # start = time.perf_counter()
-        assert all(
-            edge_key(get_features(game_state), move) in self.P
-            for move in valid_moves
-        )
-        # end = time.perf_counter()
-        # self.timings["assert"].append(end - start)
-
-        # Modified from alphago zero paper to add a small number to uct so it's never zero.
-        # TODO Vectorize this whole function over valid_moves
-        def UCT(move):
-            edge = edge_key(get_features(game_state), move)
-            assert edge in self.Q
-
-            uct = (
-                self.exploration
-                * (
-                    math.sqrt(
-                        sum(
-                            self.N[
-                                edge_key(get_features(game_state), valid_move)
-                            ]
-                            for valid_move in valid_moves
-                        )
-                        + DEFAULT_PARENT_VISITS
-                    )
-                    / (1 + self.N[edge])
-                )
-                + self.Q[edge]
-            )
-            return uct
-
-        def UCT_import(
-            move,
-            exploration=self.exploration,
-            game_state=game_state,
-            valid_moves=valid_moves,
-            N=self.N,
-            Q=self.Q,
-        ):
-            return C_UCT(move, exploration, game_state, valid_moves, N, Q)
-
-        # start = time.perf_counter()
-        # print(list(map(lambda m : round(UCT_import(m), 2), valid_moves)))
-        # print(list(map(lambda m : round(UCT(m), 2), valid_moves)))
-        # print("\n")
-        # selected = max(valid_moves, key=lambda m : C_UCT(m, self.exploration, game_state, valid_moves, self.N, self.Q))
-        if self.verbose >= 3:
-            UCTs = np.zeros(valid_moves_array.shape)
-            for move in valid_moves:
-                UCTs[move[0], move[1]] = UCT(move)
-            print("UCTs")
-            print(UCTs)
-        selected = max(valid_moves, key=UCT_import)
-        # end = time.perf_counter()
-        # self.timings["max"].append(end - start)
+        selected = self._UCT_vectorized(valid_moves, features)
 
         return selected
 
@@ -169,7 +119,7 @@ class MCTS:
                 # print(active_game_state)
                 return active_game_state, visited_edges
             # start = time.perf_counter()
-            move = self._uct_select(active_game_state)
+            move = self._uct_select(active_game_state, features)
             # end = time.perf_counter()
             # self.timings["uct_select"].append(end - start)
             # print(f"Selected move {move} with uct")
@@ -310,8 +260,10 @@ class MCTS:
         return training_states
 
 
-def profiling():
-    agent = XOAgentModel(feature_planes=3, board_edge_len=9)
+def profiling():    
+    net = Network()
+    agent, revision = get_agent(network=net, load_weights=False)
+
     game_state = game_state_from_game(XOGame())
 
     monte = MCTS()
@@ -423,8 +375,8 @@ def main():
     #     for i in range(8):
     #         list_training_data.append(monte.self_play(agent, 200))
     #     save_training_data(list_training_data, 0)
-    net = Network(hidden=128)
-    agent, revision = get_agent(network=net)
+    net = Network()
+    agent, revision = get_agent(network=net, load_weights=False)
 
     # evaluate_agents(XOAgentModel(Network()), trained_agent, games=10, rollouts_per_move=200)
     np.set_printoptions(precision=2)
