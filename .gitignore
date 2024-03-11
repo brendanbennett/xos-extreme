@@ -162,3 +162,7 @@ cython_debug/
 # Project specific
 models/
 training_data/
+
+Profile.prof
+
+profiling_results
