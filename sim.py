@@ -117,7 +117,7 @@ class MCTS:
                 # print(f"Found unexpanded game state because {reason}")
 
                 # print(active_game_state)
-                return active_game_state, visited_edges
+                return active_game_state, features, visited_edges
             # start = time.perf_counter()
             move = self._uct_select(active_game_state, features)
             # end = time.perf_counter()
@@ -131,9 +131,8 @@ class MCTS:
             # print("Next game state after uct:")
             # print(active_game_state)
 
-    def _expand(self, game_state, agent: XOAgentBase) -> float:
+    def _expand(self, game_state, features, agent: XOAgentBase) -> float:
         """Returns value evaluated by agent"""
-        features = get_features(game_state)
         agent_policy, value = agent.get_policy_and_value(features)
 
         valid_moves_array = (
@@ -189,13 +188,13 @@ class MCTS:
 
     def rollout(self, game_state, agent: XOAgentBase):
         # start = time.perf_counter()
-        leaf_game_state, visited_edges = self._select(game_state)
+        leaf_game_state, features, visited_edges = self._select(game_state)
         # end = time.perf_counter()
         # self.timings["select"].append(end - start)
         # print("Trajectories before expand:")
         # print(self.trajectories.values())
         # start = time.perf_counter()
-        value = self._expand(leaf_game_state, agent)
+        value = self._expand(leaf_game_state, features, agent)
         # end = time.perf_counter()
         # self.timings["expand"].append(end - start)
         # print("Trajectories after expand:")
@@ -270,6 +269,17 @@ def profiling():
     rollouts = 200
     for i in range(rollouts):
         monte.rollout(game_state, agent)
+        
+
+def profiling_self_play():
+    net = Network()
+    agent, revision = get_agent(network=net, load_weights=False)
+
+    # evaluate_agents(XOAgentModel(Network()), trained_agent, games=10, rollouts_per_move=200)
+    np.set_printoptions(precision=2)
+
+    monte = MCTS(XOGame, verbose=0)
+    monte.self_play(agent, rollouts_per_move=200)
 
 
 def save_training_data(

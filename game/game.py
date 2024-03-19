@@ -14,18 +14,18 @@ def _generate_all_boards():
     all_boards = [np.array([int(i) for i in list(k)], dtype=np.int8).reshape(3, 3) for k in all_boards_strs]
     return all_boards
 
-def _index_from_board(board):
-    return int("".join([str(int(i)) for i in board.flatten()]), 3)
+def _hashable_from_board(board):
+    return board.tobytes()
 
 def _get_winners(boards):
     winners = [C_check_win_from_scratch(board) for board in boards]
-    winners = [k if k != -1 else 0 for k in winners]
+    winners = [k if k != -1 else None for k in winners]
     return winners
 
-winners = _get_winners(_generate_all_boards())
+_allboards = _generate_all_boards()
+_winners = _get_winners(_generate_all_boards())
+_winners = {_hashable_from_board(k): v for k, v in zip(_allboards, _winners)}
 
-def check_win_lookup(board):
-    return winners[_index_from_board(board)]
 
 class XOGame:
     def __init__(self, game_state=None) -> None:
@@ -206,11 +206,7 @@ class XOGame:
 
     @staticmethod
     def check_win_from_scratch(board):
-        # w = XOGame.check_win_from_scratch_old(board)
-        wc = check_win_lookup(board)
-        wc = None if wc == 0 else wc
-        # assert w == wc
-        return wc
+        return _winners[_hashable_from_board(board)]
 
     @staticmethod
     def generate_large_board_from_board(board):
